@@ -153,4 +153,6 @@ Linux CI 若缺少浏览器系统库，可使用 `npx playwright install --with-
 
 Service Worker 缓存应用壳，不负责长期保存用户录屏或在后台持续转码。新版本发布后检查资源版本一致性和旧缓存清理；不要在用户处理过程中强制刷新。完整部署步骤见 [DEPLOYMENT.md](./DEPLOYMENT.md)，平台边界与官方来源见 [COMPATIBILITY.md](./COMPATIBILITY.md)。
 
+离线命中仅查询当前版本的 `CACHE`。预缓存请求与 `crossorigin` 脚本 / 样式请求可能带有不同的 `Origin`，而 Vite preview 返回 `Vary: Origin`；因此只有构建 `ASSETS` 清单内的精确资源 URL 使用 `ignoreVary: true`，导航失败回退也只读取当前缓存的 `index.html`。其他 URL、任意请求和用户视频均不采用该匹配策略，也不动态加入缓存。离线回归必须等待分析控件真实解除禁用后继续，不能用错误的就绪断言掩盖 JS / CSS 未载入。
+
 分发时保留 `public/THIRD_PARTY_NOTICES.txt`：gifenc 为 MIT；Mediabunny 1.62.0 为 MPL-2.0，其中已附完整许可证与对应固定版本源码链接。修改受 MPL 覆盖的库文件时，应同时提供相应修改的源代码；不要把它误标为 MIT。

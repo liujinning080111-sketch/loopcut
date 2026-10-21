@@ -8,7 +8,11 @@
 
 WebKit 当前源码的 VideoFrame 绘制重载明确忽略源矩形。修复先生成完整且显示方向正确的 Canvas，再读取选区像素或从普通 Canvas 裁剪缩放；完整源帧也检查 8192 px 单边及 16,777,216 像素上限。GIF 则对全序列协调延时，保留每个有效选区帧且每帧至少 10 ms；可行时文件总时长取最近的 10 ms，否则显示保留全部帧所需的延长时长，不再因有效短残帧直接拒绝导出。[WebKit 裁剪路径](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/html/canvas/CanvasRenderingContext2DBase.cpp#L1832-L1863)
 
-本轮最终本地复跑：**67 / 67 项单元测试、24 / 24 项浏览器流程及生产构建全部通过。** 浏览器由 Chromium 和桌面 WebKit iPhone 布局分别执行：导出裁剪 6 项、120 fps 短帧 2 项、原帧导出 4 项、裁剪手势 6 项、原有应用流程 6 项。以下证据属于本地测试，尚不能证明修复已发布或通过真实 iPhone 复验。
+本轮最终本地复跑为 **67 / 67 项单元测试、24 / 24 项浏览器流程及生产构建全部通过**，已包含更严格的就绪等待与下述离线缓存修复。浏览器由 Chromium 和桌面 WebKit iPhone 布局分别执行：导出裁剪 6 项、120 fps 短帧 2 项、原帧导出 4 项、裁剪手势 6 项、原有应用流程 6 项。以下本地证据尚不能证明修复已发布或通过真实 iPhone 复验。
+
+首轮 GitHub Actions 中，单元测试和构建通过，浏览器流程 **23 / 24 通过**，一项原帧导出用例超时。trace 显示测试点击微调面板时分析进度仍为 75%、`fieldset#controls` 仍带 `disabled`；测试使用的 `toBeEnabled()` 没有检查该 fieldset 自身的禁用属性，导致提前点击并被后续布局变化打断。等待条件已改为明确检查 `disabled` 属性已移除，并确认微调面板已经展开；保留真实点击及全部画面断言。**该次 CI 失败的历史记录保留；修正后的本地全套已通过，新的公开 CI 与部署结果需另行核实。** [首轮 CI 记录](https://github.com/liujinning080111-sketch/loopcut/actions/runs/39651861050)
+
+更严格的等待条件随后暴露 Chromium 离线重载失败：HTML 可从缓存载入，但 JS / CSS 请求失败，其他流程通过。trace 显示预缓存请求没有 `Origin`，实际带 `crossorigin` 的脚本 / 样式请求带 `Origin`，Vite preview 的 `Vary: Origin` 使旧缓存查询未命中后尝试离线网络。Service Worker 已改为仅在当前版本缓存中，对构建 `ASSETS` 清单里的精确 URL 使用 `ignoreVary: true`，导航失败也只回退到当前缓存的入口；任意地址及用户文件不采用此策略、不被加入缓存。**最终完整回归中，Chromium 与桌面 WebKit 均通过离线重载后的真实视频导入和分析，控件实际解除禁用。**
 
 | 检查 | 本轮实际覆盖与结果 |
 | --- | --- |
