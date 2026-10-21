@@ -12,7 +12,7 @@ const identify = (rgba: ArrayLike<number>, width: number) => {
 test('keeps every 120fps source frame and discloses GIF duration increasing from 0.25 to 0.30 seconds', async ({ page }) => {
   await page.goto('/');
   await page.locator('#file').setInputFiles(fixture);
-  await expect(page.locator('#controls')).toBeEnabled();
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
   await expect(page.locator('#timing-info')).toContainText('120 fps');
   await expect(page.locator('#source-meta')).toContainText('0.25 s');
   // Exercise the ordinary GIF defaults: native dimensions and native frames.

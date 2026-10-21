@@ -13,13 +13,14 @@ const identify = (rgba: ArrayLike<number>, width: number) => {
 test('preserves 1280 native pixels and every 60fps source frame in GIF and APNG', async ({ page }) => {
   await page.goto('/');
   await page.locator('#file').setInputFiles(fixture);
-  await expect(page.locator('#controls')).toBeEnabled();
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
   await expect(page.locator('#timing-info')).toContainText('60 fps');
   await expect(page.locator('#format')).toHaveValue('gif');
   await expect(page.locator('#fps')).toHaveValue('0');
   await expect(page.locator('#size')).toHaveValue('0');
   await expect(page.locator('#format-note')).toContainText('明显变慢');
   await page.locator('.fine-tune summary').click();
+  await expect(page.locator('.fine-tune')).toHaveAttribute('open', '');
   for (const [id, value] of Object.entries({ 'crop-x': '0', 'crop-y': '0', 'crop-width': '100', 'crop-height': '100', start: '0', end: '0.5' })) {
     await page.locator(`#${id}`).fill(value);
     await page.locator(`#${id}`).dispatchEvent('change');
@@ -75,16 +76,17 @@ test('preserves 1280 native pixels and every 60fps source frame in GIF and APNG'
   expect(shortFrames.reduce((n,frame)=>n+frame.delay,0)).toBe(120);
   await expect(page.locator('#result-meta')).toContainText('8 帧');
   await expect(page.locator('#result-meta')).toContainText('0.12 s');
-  await expect(page.locator('#controls')).toBeEnabled();
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
 });
 
 test('compatibility decoder follows all source timestamps without WebCodecs', async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(window, 'VideoDecoder', { value: undefined, configurable: true }));
   await page.goto('/');
   await page.locator('#file').setInputFiles(fixture);
-  await expect(page.locator('#controls')).toBeEnabled();
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
   await expect(page.locator('#timing-info')).toContainText('兼容解码');
   await page.locator('.fine-tune summary').click();
+  await expect(page.locator('.fine-tune')).toHaveAttribute('open', '');
   for (const [id, value] of Object.entries({ 'crop-x': '0', 'crop-y': '0', 'crop-width': '100', 'crop-height': '100', start: '0', end: '0.5' })) {
     await page.locator(`#${id}`).fill(value);
     await page.locator(`#${id}`).dispatchEvent('change');

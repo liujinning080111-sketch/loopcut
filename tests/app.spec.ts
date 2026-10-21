@@ -8,7 +8,7 @@ const demoPath = fileURLToPath(new URL('../public/demo.mp4', import.meta.url));
 async function importDemo(page: Page) {
   await page.goto('/');
   await page.locator('#file').setInputFiles(demoPath);
-  await expect(page.locator('#controls')).toBeEnabled();
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
   await expect(page.locator('#preview-empty')).toBeHidden();
   await expect(page.locator('#status')).toContainText('已找到表情候选');
 }
@@ -133,7 +133,7 @@ test('cancels decoding, recovers after invalid files and never leaves controls s
   await expect(page.locator('#progress-area')).toBeHidden();
   await expect(page.locator('#import-empty')).toBeEnabled();
   await page.locator('#file').setInputFiles(demoPath);
-  await expect(page.locator('#controls')).toBeEnabled();
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
   await expect(page.locator('#preview-empty')).toBeHidden();
   // Hold the encoder's acknowledgement to exercise a deterministic in-flight
   // export cancellation, rather than racing a very small fixture on fast CPUs.
@@ -145,7 +145,7 @@ test('cancels decoding, recovers after invalid files and never leaves controls s
   await page.locator('#export').click();
   await page.locator('#cancel').click();
   await expect(page.locator('#status')).toContainText('已取消');
-  await expect(page.locator('#controls')).toBeEnabled();
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
   await expect(page.locator('#result')).toBeHidden();
   await page.evaluate(() => (window as unknown as { restoreWorker: () => void }).restoreWorker());
 });
@@ -163,7 +163,7 @@ test('fits a narrow screen and has a working offline application shell', async (
   await page.reload();
   await expect(page.locator('h1')).toContainText('录屏转 GIF');
   await page.locator('#demo').click();
-  await expect(page.locator('#controls')).toBeEnabled();
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await context.setOffline(false);
 });

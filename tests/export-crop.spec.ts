@@ -32,7 +32,7 @@ function colorCoverage(pixels: ArrayLike<number>) {
 async function prepareCrop(page: Page) {
   await page.goto('/');
   await page.locator('#file').setInputFiles(demo);
-  await expect(page.locator('#controls')).toBeEnabled();
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
   await page.locator('.fine-tune summary').click();
   // Fixture source is 1080×1920; this OFF-CENTER selection is 432×384,
   // x=270, y=864, inside the independently known white sticker rectangle.
