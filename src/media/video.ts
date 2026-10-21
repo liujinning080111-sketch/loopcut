@@ -120,10 +120,10 @@ export async function openVideo(file: File, video: HTMLVideoElement, signal?: Ab
   }
 }
 
-export async function seekFrame(video: HTMLVideoElement, time: number, crop: Rect = { x: 0, y: 0, width: 1, height: 1 }, maxSide = MAX_OUTPUT_SIDE, signal?: AbortSignal): Promise<Frame> {
+export async function seekFrame(video: HTMLVideoElement, time: number, crop: Rect = { x: 0, y: 0, width: 1, height: 1 }, maxSide = 0, signal?: AbortSignal): Promise<Frame> {
   assertActive(signal);
   if (!Number.isFinite(video.duration) || !video.videoWidth) throw new Error('请先导入可播放的视频。');
-  if (!Number.isFinite(time) || !Number.isInteger(maxSide) || maxSide < 1 || maxSide > MAX_OUTPUT_SIDE) throw new Error('帧时间或输出尺寸无效。');
+  if (!Number.isFinite(time) || !Number.isInteger(maxSide) || maxSide < 0 || maxSide > MAX_OUTPUT_SIDE) throw new Error('帧时间或输出尺寸无效。');
   if (![crop.x, crop.y, crop.width, crop.height].every(Number.isFinite) || crop.width <= 0 || crop.height <= 0) throw new Error('裁剪区域无效，请重新框选。');
   video.pause();
   const target = Math.max(0, Math.min(time, Math.max(0, video.duration - 0.001)));
@@ -148,7 +148,7 @@ export async function seekFrame(video: HTMLVideoElement, time: number, crop: Rec
   canvas.height = height;
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) throw new Error('此浏览器无法创建画布，请重新打开 Safari。');
-  context.imageSmoothingEnabled = true;
+  context.imageSmoothingEnabled = width !== sw || height !== sh;
   context.imageSmoothingQuality = 'high';
   context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
   const data = context.getImageData(0, 0, width, height).data;
