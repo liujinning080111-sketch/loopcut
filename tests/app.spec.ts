@@ -37,6 +37,24 @@ test('imports MP4, detects the loop, supports corrections and exports both GIF b
   const interval = await page.evaluate(() => Number((document.querySelector('#end') as HTMLInputElement).value) - Number((document.querySelector('#start') as HTMLInputElement).value));
   expect(interval).toBeGreaterThanOrEqual(1.75);
   expect(interval).toBeLessThanOrEqual(2.25);
+  // Check actual decoded pixels at known fixture times. Merely advancing
+  // currentTime/receiving seeked can still leave a stale canvas on some ports.
+  const sampledPixels: number[][] = [];
+  for (const time of ['0', '0.5', '2']) {
+    await page.locator('#scrub').evaluate((input: HTMLInputElement, value) => {
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }, time);
+    sampledPixels.push(await page.locator('#source-canvas').evaluate((canvas: HTMLCanvasElement) => {
+      const x = Math.round(canvas.width * 80 / 360);
+      const y = Math.round(canvas.height * 260 / 640);
+      return Array.from(canvas.getContext('2d')!.getImageData(x, y, Math.round(canvas.width * 200 / 360), Math.round(canvas.height * 200 / 640)).data);
+    }));
+  }
+  const pixelDistance = (a: number[], b: number[]) => a.reduce((sum, value, i) => sum + (i % 4 === 3 ? 0 : Math.abs(value - b[i])), 0) / (a.length * .75);
+  const motionDistance = pixelDistance(sampledPixels[0], sampledPixels[1]);
+  expect(motionDistance).toBeGreaterThan(2);
+  expect(pixelDistance(sampledPixels[0], sampledPixels[2])).toBeLessThan(motionDistance * .3);
   await expect.poll(() => page.locator('#preview').evaluate((canvas: HTMLCanvasElement) => {
     if (canvas.width > 200 || canvas.height > 200) return 0;
     return canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data.filter((_, i) => i % 4 === 3 && _ > 0).length;
