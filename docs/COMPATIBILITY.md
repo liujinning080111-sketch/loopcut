@@ -1,6 +1,6 @@
 # iPhone Safari 兼容性与技术边界
 
-核实日期：2026-10-21。本文区分 Web 平台能力、项目设计选择与尚待真机确认的行为。**目标平台为 iOS 17 及以上的 Safari 和主屏幕 Web App；这是一项产品兼容目标，不代表已经完成所有版本、机型的实测。** 真机记录见 [DEVICE-TESTS.md](./DEVICE-TESTS.md)。
+基础核实日期：2026-10-21；VideoFrame 裁剪与动画短延时规则重新核实于 2026-10-22。本文区分 Web 平台能力、项目设计选择与尚待真机确认的行为。**目标平台为 iOS 17 及以上的 Safari 和主屏幕 Web App；这是一项产品兼容目标，不代表已经完成所有版本、机型的实测。** 真机记录见 [DEVICE-TESTS.md](./DEVICE-TESTS.md)。
 
 ## 已核实的能力与实现选择
 
@@ -26,11 +26,17 @@
 
 默认 GIF 使用原裁剪像素尺寸、源 PTS 调度；只有用户主动选较小尺寸或固定帧率时才缩减。裁剪框以经典四角调整大小、框内拖动位置，最终矩形映射到旋转 / 翻转后的显示像素并取整。当前保护上限是单边 8192 px、单帧 16,777,216 像素、1440 帧、128 MiB 输出文件；超出时失败退出，不自动缩图或抽帧。设备可能在达到这些保护值之前耗尽资源，128 MiB 也不是进程内存上限或微信接收承诺。
 
-GIF 无法逐帧精确表示 1/60 秒等间隔。累计舍入可以减少总时长误差，但 60 fps 常写成 10 / 20 ms 交替。当前 WebKit 的 Apple 图像解码路径把小于 11 ms 的帧延时改成 100 ms，可能使结果明显变慢；这是上游源码证据，不代替某个 iOS / 微信版本的实际播放测试。[WebKit frameDurationAtIndex](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/platform/graphics/cg/ImageDecoderCG.cpp#L506-L533)
+WebKit 的 VideoFrame 绘制重载尚未使用源矩形：仅把完整帧绘入目标矩形。这会使直接通过 Mediabunny `CanvasSink.crop` 裁剪的结果变成整屏压缩。项目先让 CanvasSink 生成完整、已旋转 / 翻转的显示画布，再从该 Canvas 读取选区像素；显式缩小也从 Canvas 裁剪缩放。此路径同时检查完整源帧与输出帧尺寸，因此小选区不能绕过完整源帧的 8192 px 单边 / 16,777,216 像素预算。源码核实不等于已在全部 iPhone 版本完成修复验收。[WebKit VideoFrame 绘制](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/html/canvas/CanvasRenderingContext2DBase.cpp#L1832-L1863)、[Mediabunny 1.62 绘制实现](https://github.com/Vanilagy/mediabunny/blob/v1.62.0/src/sample.ts#L1292-L1408)
+
+GIF 无法逐帧精确表示 1/60 秒或不足 10 ms 的间隔。项目对完整序列统一分配 10 ms 整数倍延时，每个选区帧至少保留 10 ms，不因短头帧、短尾帧或 VFR 短帧拒绝整段，也不抽掉这些帧。可行时，文件总时长取原总时长最接近的 10 ms；若帧数乘以 10 ms 已超过该时长，则延长至能容纳全部帧的最低时长，并显示实际生成文件的时长。协调局部时间边界可能改变节奏，不能称为逐帧时序无损。[GIF89a 延时定义](https://www.w3.org/Graphics/GIF/spec-gif89a.txt)
+
+文件时长与播放器展示时长仍是两件事。60 fps 常写成 10 / 20 ms 交替；当前 WebKit 的 Apple 图像解码路径把小于 11 ms 的帧延时改成 100 ms，可能使结果明显变慢。最低 10 ms 是文件编码策略，不是 Safari 原速播放保证；这项上游源码证据也不能替代某个 iOS / 微信版本的实际播放测试。[WebKit frameDurationAtIndex](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/platform/graphics/cg/ImageDecoderCG.cpp#L506-L533)
 
 APNG 的 delay_num / delay_den 各为 uint16，按秒解释；1/30、1/60、1001/30000 等常见间隔可精确表示，一般 VFR 分数仍可能超出字段范围。APNG 的 1/120 秒也可能触发播放器短延时钳制，屏幕刷新和运行负载另会影响展示。因此“文件保存每帧”不等于“所有播放器原速显示”。PNG 无损只覆盖编码输入的 RGBA；浏览器的视频解码、色彩空间转换和 HDR 到 SDR 映射可能已经改变像素。[PNG/APNG fcTL](https://www.w3.org/TR/png-3/#fcTL-chunk)、[WebCodecs 像素转换](https://www.w3.org/TR/webcodecs/#videoframecopytooptions)
 
 Mediabunny 1.62.0 会将支持的简单 edit list 偏移映射到 packet PTS，但多段 edit 或非 1 倍速 edit 只发出警告，不代表完整实现。项目拦截此类警告以停止原帧模式；复杂剪辑和非标准时间轴不在“任意 MOV 都支持”的承诺内。对简单 edit 的有效裁尾区间、负时间预滚、空区间和旋转一致性也必须保守处理，无法确认时不可声称原时间轴精确重建。[固定版本容器解析源码](https://github.com/Vanilagy/mediabunny/blob/v1.62.0/src/isobmff/isobmff-demuxer.ts#L1090-L1134)
+
+界面起止时间的显示舍入不能扩大真实视频范围：例如 32 帧 / 30 fps 视频约长 1.066667 秒，即使用户输入 1.07 秒，实际终点仍限制在该片尾。固定帧率采样仅消除浮点运算制造的零时长额外帧；真实存在的短残帧仍保留并交给所选格式处理。
 
 rVFC 的触发频率受视频帧率与浏览器绘制频率中较低者限制，120 fps 视频在 60 Hz 绘制时可能只有约 60 次回调，且回调时机没有严格同步保证。它可用于预览与就绪协调，不能用于证明所有源帧都已枚举或用回调频率冒充原 FPS。[MDN requestVideoFrameCallback](https://developer.mozilla.org/en-US/docs/Web/API/HTMLVideoElement/requestVideoFrameCallback)
 
