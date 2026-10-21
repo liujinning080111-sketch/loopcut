@@ -70,7 +70,10 @@ test('imports MP4, detects the loop, supports corrections and exports both GIF b
     await page.locator(`#${id}`).dispatchEvent('change');
   }
   await page.locator('[data-mode="rectangle"]').click();
+  await expect(page.locator('#fps')).toHaveValue('0');
+  await expect(page.locator('#timing-info')).toContainText('30 fps');
   const rectangle = await exported(page);
+  expect(rectangle.frames).toHaveLength(60);
   expect(rectangle.frames.reduce((total, frame) => total + frame.delay, 0)).toBe(2000);
   expect(rectangle.gif.lsd.width).toBeGreaterThanOrEqual(599);
   expect(rectangle.gif.lsd.width).toBeLessThanOrEqual(601);
@@ -96,6 +99,7 @@ test('imports MP4, detects the loop, supports corrections and exports both GIF b
   expect(transparent.frames.reduce((total, frame) => total + frame.delay, 0)).toBe(2000);
   // A valid manual endpoint need not land on the selected frame-rate grid.
   // This previously could create a sub-10ms last frame and reject export.
+  await page.locator('#fps').selectOption('20');
   await page.locator('#end').fill('1.07');
   await page.locator('#end').dispatchEvent('change');
   await expect(page.locator('#result')).toBeHidden();

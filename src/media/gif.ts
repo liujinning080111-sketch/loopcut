@@ -1,15 +1,16 @@
 import type { GifFrame } from '../types';
+import type { GifEncodingOptions } from './gif-core';
 
 type Reply = { id: number; type: 'ack' | 'done' | 'error'; bytes?: Uint8Array; message?: string };
 
-export async function encodeGif(frames: AsyncIterable<GifFrame>, options: { signal?: AbortSignal; onProgress?: (count: number) => void } = {}): Promise<Blob> {
+export async function encodeGif(frames: AsyncIterable<GifFrame>, options: GifEncodingOptions & { signal?: AbortSignal; onProgress?: (count: number) => void } = {}): Promise<Blob> {
   const { signal, onProgress } = options;
   const check = () => { if (signal?.aborted) throw new DOMException('已取消处理', 'AbortError'); };
   check();
   if (typeof Worker === 'undefined') throw new Error('此浏览器不支持后台编码，请使用新版 Safari。');
   const worker = new Worker(new URL('./gif.worker.ts', import.meta.url), { type: 'module' });
   let nextId = 0;
-  function request(payload: { type: 'frame'; frame: GifFrame } | { type: 'finish' }, transfer: Transferable[] = []): Promise<Reply> {
+  function request(payload: { type: 'init'; options: GifEncodingOptions } | { type: 'frame'; frame: GifFrame } | { type: 'finish' }, transfer: Transferable[] = []): Promise<Reply> {
     check();
     return new Promise((resolve, reject) => {
       const id = nextId++;
@@ -37,6 +38,7 @@ export async function encodeGif(frames: AsyncIterable<GifFrame>, options: { sign
     });
   }
   try {
+    await request({ type: 'init', options: { maxBytes: options.maxBytes, mergeDuplicates: options.mergeDuplicates } });
     let count = 0;
     for await (const frame of frames) {
       check();
