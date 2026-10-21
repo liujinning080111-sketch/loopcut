@@ -39,6 +39,54 @@ function waitForMedia(video: HTMLVideoElement, event: string, signal?: AbortSign
   });
 }
 
+/**
+ * `seeked` is a media-timeline signal, not a promise that canvas can already
+ * read the new compositor frame. Arm the frame callback before seeking, then
+ * allow a paint boundary before snapshotting. Paused/occluded videos may never
+ * produce rVFC, so two animation frames and a 100ms ceiling bound the fallback.
+ */
+function presentationBarrier(video: HTMLVideoElement, signal?: AbortSignal): { wait: () => Promise<void>; cancel: () => void } {
+  let completed = false;
+  let seekComplete = false;
+  let videoCallback: number | undefined;
+  let animationCallback: number | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let resolve!: () => void;
+  const ready = new Promise<void>(done => { resolve = done; });
+  const finish = () => {
+    if (completed) return;
+    completed = true;
+    if (videoCallback !== undefined) video.cancelVideoFrameCallback?.(videoCallback);
+    if (animationCallback !== undefined) cancelAnimationFrame(animationCallback);
+    if (timer !== undefined) clearTimeout(timer);
+    signal?.removeEventListener('abort', finish);
+    resolve();
+  };
+  const registerFrame = () => {
+    if (typeof video.requestVideoFrameCallback !== 'function') return;
+    videoCallback = video.requestVideoFrameCallback(() => {
+      if (completed) return;
+      if (seekComplete) finish();
+      else registerFrame();
+    });
+  };
+  registerFrame();
+  signal?.addEventListener('abort', finish, { once: true });
+  return {
+    wait: () => {
+      if (!completed) {
+        seekComplete = true;
+        animationCallback = requestAnimationFrame(() => {
+          animationCallback = requestAnimationFrame(finish);
+        });
+        timer = setTimeout(finish, 100);
+      }
+      return ready;
+    },
+    cancel: finish,
+  };
+}
+
 export async function openVideo(file: File, video: HTMLVideoElement, signal?: AbortSignal): Promise<{ width: number; height: number; duration: number; url: string }> {
   assertActive(signal);
   if (!file.size) throw new Error('这个视频文件是空的，请重新选择。');
@@ -78,10 +126,16 @@ export async function seekFrame(video: HTMLVideoElement, time: number, crop: Rec
   if (![crop.x, crop.y, crop.width, crop.height].every(Number.isFinite) || crop.width <= 0 || crop.height <= 0) throw new Error('裁剪区域无效，请重新框选。');
   video.pause();
   const target = Math.max(0, Math.min(time, Math.max(0, video.duration - 0.001)));
-  if (Math.abs(video.currentTime - target) > 0.0001 || video.seeking) {
-    await waitForMedia(video, 'seeked', signal, undefined, () => { video.currentTime = target; });
+  const presentation = presentationBarrier(video, signal);
+  try {
+    if (Math.abs(video.currentTime - target) > 0.0001 || video.seeking) {
+      await waitForMedia(video, 'seeked', signal, undefined, () => { video.currentTime = target; });
+    }
+    await waitForMedia(video, 'loadeddata', signal, () => video.readyState >= 2);
+    await presentation.wait();
+  } finally {
+    presentation.cancel();
   }
-  await waitForMedia(video, 'loadeddata', signal, () => video.readyState >= 2);
   assertActive(signal);
   const sx = Math.min(video.videoWidth - 1, Math.max(0, Math.round(crop.x * video.videoWidth)));
   const sy = Math.min(video.videoHeight - 1, Math.max(0, Math.round(crop.y * video.videoHeight)));
