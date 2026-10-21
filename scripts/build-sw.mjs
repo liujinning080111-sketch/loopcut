@@ -11,13 +11,16 @@ const SCOPE=new URL(self.registration.scope).pathname;
 const PREFIX='loopcut:'+SCOPE+':';
 const CACHE=PREFIX+VERSION;
 const ASSETS=${JSON.stringify(assets)};
+const PRECACHED=new Set(ASSETS.map(asset=>new URL(asset,self.registration.scope).href));
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS))));
 // No skipWaiting: the next launch updates without interrupting an export.
 self.addEventListener('activate',event=>event.waitUntil((async()=>{for(const key of await caches.keys()){if(key.startsWith(PREFIX)&&key!==CACHE)await caches.delete(key);}await self.clients.claim();})()));
 self.addEventListener('fetch',event=>{const url=new URL(event.request.url);if(event.request.method!=='GET'||url.origin!==self.location.origin||!url.pathname.startsWith(SCOPE))return;
-if(event.request.mode==='navigate'){event.respondWith(fetch(event.request).catch(()=>caches.match(new URL('./index.html',self.registration.scope))));return;}
-// Precache only. User videos and blob URLs never enter CacheStorage.
-event.respondWith(caches.match(event.request).then(hit=>hit||fetch(event.request)));
+if(event.request.mode==='navigate'){event.respondWith(fetch(event.request).catch(async()=>{const cache=await caches.open(CACHE);return cache.match(new URL('./index.html',self.registration.scope),{ignoreVary:true});}));return;}
+// Only these immutable app assets may ignore Vary: Origin: preload requests
+// omit Origin while crossorigin script/style requests include it. User files
+// and arbitrary URLs never enter this cache or receive this matching policy.
+event.respondWith((async()=>{const cache=await caches.open(CACHE);const hit=PRECACHED.has(url.href)?await cache.match(event.request,{ignoreVary:true}):undefined;return hit||fetch(event.request);})());
 });
 `);
 await writeFile('dist/.nojekyll','');

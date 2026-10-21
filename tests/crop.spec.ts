@@ -19,7 +19,7 @@ async function resetCrop(page:Page){
 }
 async function importDemo(page:Page){
   await page.goto('/');await page.locator('#file').setInputFiles(demoPath);
-  await expect(page.locator('#controls')).toBeEnabled();await resetCrop(page);
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');await resetCrop(page);
 }
 async function imageBox(page:Page){const box=await page.locator('#source-canvas').boundingBox();expect(box).not.toBeNull();return box!;}
 

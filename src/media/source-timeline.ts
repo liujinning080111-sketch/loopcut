@@ -34,7 +34,13 @@ export function sourceSchedule(samples: SourceSample[], start: number, end: numb
 
 export function fixedSchedule(start: number, end: number, fps: number): FrameStep[] {
   if (![start, end, fps].every(Number.isFinite) || end <= start || fps <= 0) throw new Error('帧率设置无效。');
-  const count = Math.ceil((end - start) * fps);
+  const frameCount = (end - start) * fps;
+  const nearest = Math.round(frameCount);
+  // Decimal times such as 0.1–0.4 can become 6.000000000000001 frames.
+  // Account for subtraction/multiplication roundoff, including offset times,
+  // without discarding a real partial final frame using a fixed time epsilon.
+  const roundoff = 4 * Number.EPSILON * Math.max(1, Math.abs(start) * fps, Math.abs(end) * fps);
+  const count = Math.max(1, Math.ceil(Math.abs(frameCount - nearest) <= roundoff ? nearest : frameCount));
   if (count > MAX_GIF_FRAMES) throw new Error('所选片段帧数过多，请缩短片段。');
   return Array.from({ length: count }, (_, i) => {
     const time = start + i / fps;
@@ -90,10 +96,20 @@ export async function* originalFrames(file: File, timeline: SourceTimeline, vide
   const input = createInput(file);
   const abort = () => input.dispose();
   signal.addEventListener('abort', abort, { once: true });
+  let resizeCanvas: HTMLCanvasElement | undefined;
   try {
     const track = await input.getPrimaryVideoTrack();
     if (!track) throw new Error('视频轨道无法读取。');
-    const sink = new CanvasSink(track, { crop: { left, top, width, height }, ...output, fit: 'fill', alpha: true, poolSize: 1 });
+    // Materialize the entire oriented frame first. Some WebKit VideoFrame
+    // drawing paths ignore drawImage's source rectangle and squeeze the whole
+    // recording into the requested crop size. Canvas pixel reads do not depend
+    // on that decoder-specific cropping behavior.
+    fitWithinSource(timeline.width, timeline.height);
+    const sink = new CanvasSink(track, { alpha: true, poolSize: 1 });
+    if (output.width !== width || output.height !== height) {
+      resizeCanvas = document.createElement('canvas');
+      resizeCanvas.width = output.width; resizeCanvas.height = output.height;
+    }
     let i = 0;
     for await (const result of sink.canvasesAtTimestamps(steps.map(step => step.time))) {
       signal.throwIfAborted();
@@ -103,9 +119,23 @@ export async function* originalFrames(file: File, timeline: SourceTimeline, vide
       }
       const context = result.canvas.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
       if (!context) throw new Error('无法读取原始视频像素。');
-      const data = context.getImageData(0, 0, output.width, output.height).data;
+      if (result.canvas.width !== timeline.width || result.canvas.height !== timeline.height) {
+        throw new Error('解码画面尺寸与裁剪坐标不一致，已停止导出，请重新导入录屏。');
+      }
+      let data: Uint8ClampedArray;
+      if (resizeCanvas) {
+        const resized = resizeCanvas.getContext('2d', { willReadFrequently: true });
+        if (!resized) throw new Error('无法创建裁剪画布。');
+        resized.clearRect(0, 0, output.width, output.height);
+        resized.imageSmoothingEnabled = true; resized.imageSmoothingQuality = 'high';
+        // The source is now a plain canvas, never a VideoFrame.
+        resized.drawImage(result.canvas, left, top, width, height, 0, 0, output.width, output.height);
+        data = resized.getImageData(0, 0, output.width, output.height).data;
+      } else {
+        data = context.getImageData(left, top, width, height).data;
+      }
       yield { ...output, data, time: step.time };
     }
     if (i !== steps.length) throw new Error('原始画面未完整解码，已停止导出。');
-  } finally { signal.removeEventListener('abort', abort); input.dispose(); }
+  } finally { signal.removeEventListener('abort', abort); input.dispose(); if (resizeCanvas) resizeCanvas.width = resizeCanvas.height = 1; }
 }

@@ -3,6 +3,7 @@ import type { Background, BackgroundMode, Frame, GifFrame, Rect, Region } from '
 import { detectLoop, detectRegions, inspectBackground, removeBackground } from './core/vision';
 import { openVideo, sampleFrames, seekFrame } from './media/video';
 import { encodeGif } from './media/gif';
+import { planGifTiming } from './media/gif-timing';
 import { encodeApng } from './media/apng';
 import { readSourceTimeline, sourceSchedule, fixedSchedule, originalFrames, type SourceTimeline } from './media/source-timeline';
 import { hitTestCrop, moveCrop, normalizeCrop, resizeCrop, type CropCorner, type CropHandle, type Point } from './core/crop';
@@ -68,20 +69,32 @@ function stopPreviewRequest() {
   previewVideo.pause();
 }
 function refreshPreview() {stopPreviewRequest();previewDirty=true;previewFailed=false;}
+// Replacing button text during an input blur cancels the pending click in WebKit.
+function setText(id:string,value:string) {if($(id).textContent!==value)$(id).textContent=value;}
 function updateExportInfo() {
   const kind = input('format').value === 'apng' ? 'APNG' : 'GIF';
-  $('export').textContent = `生成 ${kind}`;
-  $('share').textContent = `分享 ${kind}`;
-  $('open-gif').textContent = `打开 ${kind}`;
+  setText('export',`生成 ${kind}`);
+  setText('share',`分享 ${kind}`);
+  setText('open-gif',`打开 ${kind}`);
   const geometry=number('size')===0?'保留原尺寸':`按所选 ${number('size')} px 长边缩小，不放大小图`;
   const cadence=number('fps')===0?'按原时间轴逐帧读取':`按所选 ${number('fps')} fps 采样`;
   let note = `${geometry}，${cadence}。`+(kind === 'GIF' ? 'GIF 仍会限制颜色，帧时间按 0.01 秒取整。' : 'APNG 无损保存解码后的画面，但不保证能作为微信表情。');
   const hasShortFrames=sourceTimeline?.samples.some((sample,i,list)=>i>0&&sample.timestamp-list[i-1].timestamp<.02-.000001);
   if (kind === 'GIF' && (number('fps')>50 || (number('fps')===0 && hasShortFrames))) note += ' 此视频含高帧率片段，GIF 在部分播放器会明显变慢；APNG 更适合保留帧时间。';
+  if (kind === 'GIF' && frames.length) {
+    try {
+      const steps=number('fps')===0&&sourceTimeline?sourceSchedule(sourceTimeline.samples,number('start'),number('end')):number('fps')>0?fixedSchedule(number('start'),number('end'),number('fps')):undefined;
+      if(steps){
+        const timing=planGifTiming(steps.map(step=>step.delayMs));
+        if(timing.requiresSlowdown)note+=` 保留全部 ${steps.length} 帧时，GIF 最短需 ${fmt(timing.outputDurationMs/1000)} 秒（原片段 ${fmt(timing.sourceDurationMs/1000)} 秒）；将延长文件时长，不丢帧。`;
+        else if(timing.retimed)note+=' 短帧时间会自动协调到 GIF 精度，保留全部画面；局部节奏可能有轻微变化。';
+      }
+    } catch { /* Export validation explains invalid or over-budget ranges. */ }
+  }
   if (kind === 'APNG' && sourceTimeline && (number('fps') || sourceTimeline.fps) > 90) note += ' 极高帧率的实际播放仍受屏幕与播放器限制。';
   if (sourceTimeline?.hdr) note += ' 此素材是 HDR，浏览器可能映射为 SDR，不能保留原 HDR 色彩。';
-  $('format-note').textContent = note;
-  $('timing-info').textContent = sourceTimeline ? `${sourceTimeline.variable ? '变帧率' : `${Number(sourceTimeline.fps.toFixed(3))} fps`} · 原时间轴已读取${sourceTimeline.exactDecoder ? '' : ' · 兼容解码，帧定位取决于浏览器'}` : sourceTimingError;
+  setText('format-note',note);
+  setText('timing-info',sourceTimeline ? `${sourceTimeline.variable ? '变帧率' : `${Number(sourceTimeline.fps.toFixed(3))} fps`} · 原时间轴已读取${sourceTimeline.exactDecoder ? '' : ' · 兼容解码，帧定位取决于浏览器'}` : sourceTimingError);
 }
 function notify(message: string, error = false) { $('status').hidden = false; $('status').textContent = message; $('status').classList.toggle('error', error); }
 function progress(message:string,ratio:number) { $('progress-label').textContent = message; $<HTMLProgressElement>('progress').value = ratio; }
@@ -167,14 +180,17 @@ function inspect() {
   $('tolerance-row').hidden = !transparent();previewDirty=true;
 }
 function setRange(start:number,end:number) {
-  const low=frames[0]?.time??0, high=analysisEnd||duration, minLength=Math.min(.05,high-low);
-  input('start').value=fmt(clamp(start,low,Math.max(low,high-minLength)));
-  input('end').value=fmt(clamp(end,number('start')+minLength,high));
+  const low=frames[0]?.time??0, high=Math.min(analysisEnd||duration,sourceTimeline?.duration??duration), minLength=Math.min(.05,high-low);
+  // Keep ordinary two-decimal values, but never round outside the actual clip.
+  const roundedStart=Number(fmt(clamp(start,low,Math.max(low,high-minLength))));
+  input('start').value=String(clamp(roundedStart,low,Math.max(low,high-minLength)));
+  const roundedEnd=Number(fmt(clamp(end,number('start')+minLength,high)));
+  input('end').value=String(clamp(roundedEnd,number('start')+minLength,high));
   input('start').min=fmt(low);input('end').min=fmt(low+minLength);
   input('start').max=fmt(Math.max(low,high-minLength));input('end').max=fmt(high);
   input('scrub').min=fmt(low);input('scrub').max=String(Math.max(low,high-.001));input('scrub').step='0.01';
   input('scrub').value=String(clamp(number('start'),low,high));
-  startedAt=performance.now();refreshPreview();
+  startedAt=performance.now();refreshPreview();updateExportInfo();
 }
 function findLoop() {
   if(!frames.length)return;
@@ -349,7 +365,7 @@ $('export').addEventListener('click',()=>void task(async signal=>{
   if(end-start>12.005)throw new Error('每次最多导出 12 秒。请缩短起止范围；不会自动丢帧。');
   if(native&&!sourceTimeline)throw new Error(sourceTimingError||'无法读取原帧时间轴，已停止导出。');
   const plan=native?sourceSchedule(sourceTimeline!.samples,start,end):fixedSchedule(start,end,fps);
-  if(kind==='GIF'&&plan.some(step=>step.delayMs<10-0.00001))throw new Error('选区含短于 0.01 秒的原始帧，GIF 无法准确保存。请改用 APNG，或调整起止位置；没有丢帧或降低帧率。');
+  const gifTiming=kind==='GIF'?planGifTiming(plan.map(step=>step.delayMs)):undefined;
   const count=plan.length,isTransparent=transparent(),selectedCrop={...crop},color=background.color,tolerance=number('tolerance');
   let outputWidth=0,outputHeight=0;
   invalidate();progress(`正在生成 ${kind}…`,0);
@@ -362,7 +378,8 @@ $('export').addEventListener('click',()=>void task(async signal=>{
     for await(let frame of decodedFrames()){
       signal.throwIfAborted();outputWidth=frame.width;outputHeight=frame.height;
       if(isTransparent)frame=removeBackground(frame,color,tolerance);
-      yield {...frame,delayMs:plan[i++].delayMs};
+      const delayMs=gifTiming?.delaysMs[i]??plan[i].delayMs;i++;
+      yield {...frame,delayMs};
     }
     if(i!==count)throw new Error('原始帧未完整导出。');
   }
@@ -374,12 +391,14 @@ $('export').addEventListener('click',()=>void task(async signal=>{
   for(const id of ['download','open-gif'])$<HTMLAnchorElement>(id).href=resultUrl;
   $<HTMLAnchorElement>('download').download=outputFile.name;
   $('result-title').textContent=`${kind} 已准备好`;
-  $('result-meta').textContent=`${outputWidth} × ${outputHeight} px · ${count} 帧 · ${(blob.size/1024).toFixed(0)} KB · ${fmt(end-start)} s · ${isTransparent?'透明':'矩形'}`;
+  const outputSeconds=gifTiming?gifTiming.outputDurationMs/1000:end-start;
+  $('result-meta').textContent=`${outputWidth} × ${outputHeight} px · ${count} 帧 · ${(blob.size/1024).toFixed(0)} KB · ${fmt(outputSeconds)} s · ${isTransparent?'透明':'矩形'}`;
   $('result').hidden=false;
   let canShare=false;try{canShare=!!navigator.canShare?.({files:[outputFile]});}catch{/* downloads remain available */}
   $('share-note').textContent=canShare?'点击分享后，由系统面板选择保存或接收应用。完成分享不代表已保存到照片。':'此环境不能分享动画文件。请下载文件或打开动画，使用浏览器提供的保存方式。';
   document.querySelectorAll('.steps li').forEach((el,i)=>el.classList.toggle('active',i===2));
-  notify(`${kind} 已生成，${native?'按原时间轴生成':'按所选帧率采样'} ${count} 帧。${kind==='GIF'&&plan.some(step=>step.delayMs<20)?'GIF 的高帧率播放可能变慢，详见格式说明。':'检查预览后，点击分享或下载。'}`);
+  const timingNotice=gifTiming?.requiresSlowdown?`保留全部画面，文件时长已由 ${fmt(end-start)} 秒延长为 ${fmt(outputSeconds)} 秒。`:gifTiming?.retimed?'短帧时间已自动协调，没有丢帧。':'';
+  notify(`${kind} 已生成，${native?'按原时间轴生成':'按所选帧率采样'} ${count} 帧。${timingNotice}${kind==='GIF'&&plan.some(step=>step.delayMs<20)?'GIF 的高帧率播放可能变慢，详见格式说明。':'检查预览后，点击分享或下载。'}`);
 }));
 $('share').addEventListener('click',()=>{
   if(busy||!outputFile||shareBusy)return;

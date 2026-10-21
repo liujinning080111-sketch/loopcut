@@ -9,3 +9,7 @@
 重建：安装仅供素材生成的 `Pillow==13.0.0` 与 `imageio-ffmpeg==0.6.0`，执行 `python scripts/generate-timing-fixture.py`。脚本会解码成原始 RGB，核验尺寸、30 个连续编号、每帧 PTS 为 `index / 60`、存在 B 帧，并输出 SHA-256。不同 FFmpeg/x264 版本可能产生不同文件字节，测试应核对内容与时间轴，不依赖视频文件哈希。
 
 此素材证明固定帧率输入的处理行为；不单独证明 VFR、复杂 edit list、HEVC、iPhone 真机或微信导入兼容性。
+
+`native-120.mp4` 是同一合成素材的快速时间轴版本：**1280 × 32、120 fps、0.25 秒 / 30 帧**，仍包含完整编号 0–29。执行 `python scripts/generate-short-timing-fixture.py`，脚本通过 imageio-ffmpeg 打包的 FFmpeg 将 `native-60.mp4` 的 PTS 减半，以 120 fps 重新编码为 H.264 High / yuv420p，不丢弃帧。脚本解码核验全部编号、每帧 `index / 120` 时间戳与 `1 / 120` 秒时长，并输出文件大小和 SHA-256。
+
+这份快速素材用于验证 GIF 的时间限制：保留全部 30 帧、每帧至少 10 ms 后，文件总时长必须从源视频的 **250 ms 增为 300 ms**。浏览器集成测试会同时核对导出 GIF 的编号、尺寸、帧数、实际写入时长，以及界面是否明确显示 **0.25 秒 → 0.30 秒**。该断言针对文件内的时长；播放器可能进一步钳制短帧，不代表 iPhone 或微信必定按 300 ms 播放。

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseGIF, decompressFrames } from 'gifuct-js';
 import { StreamingGifEncoder } from '../src/media/gif-core';
+import { planGifTiming } from '../src/media/gif-timing';
+import { sourceSchedule } from '../src/media/source-timeline';
 import type { GifFrame } from '../src/types';
 import { fitWithinSource, MAX_FRAME_PIXELS, MAX_GIF_BYTES, MAX_GIF_FRAMES, MAX_OUTPUT_SIDE } from '../src/media/limits';
 
@@ -52,6 +54,25 @@ describe('GIF interoperability and timing', () => {
     expect(decoded).toHaveLength(60);
     expect(decoded.reduce((sum, f) => sum + f.delay, 0)).toBe(1000);
     expect(new Set(decoded.map(f => f.delay))).toEqual(new Set([10, 20]));
+  });
+
+  it('encodes all short-boundary, dense VFR and 120fps frames with the planned total duration', () => {
+    const realBoundary = sourceSchedule(Array.from({ length: 212 }, (_, i) => ({ timestamp: .005 + i / 30, duration: 1 / 30 })), .20, 6.70);
+    const cases = [
+      [1000 / 30, 1000 / 30, 1000 / 30, 1000 / 300],
+      [100, 1, 1, 100],
+      Array.from({ length: 120 }, () => 1000 / 120),
+      realBoundary.map(step => step.delayMs),
+    ];
+    for (const sourceDelays of cases) {
+      const plan = planGifTiming(sourceDelays);
+      const sourceFrames = plan.delaysMs.map((delay, i) => frame([[i, 18, 19, 255]], delay));
+      const { decoded } = encode(sourceFrames, { mergeDuplicates: false });
+      expect(decoded).toHaveLength(sourceDelays.length);
+      expect(decoded.map(f => f.delay)).toEqual(plan.delaysMs);
+      expect(decoded.reduce((sum, f) => sum + f.delay, 0)).toBe(plan.outputDurationMs);
+      expect(decoded.map(f => f.patch![0])).toEqual(sourceFrames.map((_, i) => i));
+    }
   });
 
   it('preserves all 255 subtle opaque colors instead of collapsing RGB565 buckets', () => {

@@ -13,13 +13,14 @@ const identify = (rgba: ArrayLike<number>, width: number) => {
 test('preserves 1280 native pixels and every 60fps source frame in GIF and APNG', async ({ page }) => {
   await page.goto('/');
   await page.locator('#file').setInputFiles(fixture);
-  await expect(page.locator('#controls')).toBeEnabled();
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
   await expect(page.locator('#timing-info')).toContainText('60 fps');
   await expect(page.locator('#format')).toHaveValue('gif');
   await expect(page.locator('#fps')).toHaveValue('0');
   await expect(page.locator('#size')).toHaveValue('0');
   await expect(page.locator('#format-note')).toContainText('明显变慢');
   await page.locator('.fine-tune summary').click();
+  await expect(page.locator('.fine-tune')).toHaveAttribute('open', '');
   for (const [id, value] of Object.entries({ 'crop-x': '0', 'crop-y': '0', 'crop-width': '100', 'crop-height': '100', start: '0', end: '0.5' })) {
     await page.locator(`#${id}`).fill(value);
     await page.locator(`#${id}`).dispatchEvent('change');
@@ -60,23 +61,32 @@ test('preserves 1280 native pixels and every 60fps source frame in GIF and APNG'
   })).toEqual(Array.from({ length: 30 }, (_, i) => i));
   await expect(page.locator('#download')).toHaveAttribute('download', /\.png$/);
 
-  // A partial source frame cannot be silently discarded to fit GIF's clock.
+  // A partial source frame is retained; allocate GIF ticks across the whole
+  // clip instead of rejecting or deleting the sub-10ms tail.
   await page.locator('#format').selectOption('gif');
   await page.locator('#end').fill('0.12');
   await page.locator('#end').dispatchEvent('change');
   await page.locator('#export').click();
-  await expect(page.locator('#status')).toContainText('GIF 无法准确保存');
-  await expect(page.locator('#result')).toBeHidden();
-  await expect(page.locator('#controls')).toBeEnabled();
+  await expect(page.locator('#result')).toBeVisible();
+  await expect(page.locator('#status')).toContainText('短帧时间已自动协调');
+  const shortBytes = new Uint8Array(await page.locator('#gif-preview').evaluate(async (image: HTMLImageElement) => Array.from(new Uint8Array(await (await fetch(image.src)).arrayBuffer()))));
+  const shortFrames = decompressFrames(parseGIF(shortBytes.buffer), true);
+  expect(shortFrames.map(frame => identify(frame.patch!,1280))).toEqual(Array.from({length:8},(_,i)=>i));
+  expect(shortFrames.every(frame=>frame.delay>=10)).toBe(true);
+  expect(shortFrames.reduce((n,frame)=>n+frame.delay,0)).toBe(120);
+  await expect(page.locator('#result-meta')).toContainText('8 帧');
+  await expect(page.locator('#result-meta')).toContainText('0.12 s');
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
 });
 
 test('compatibility decoder follows all source timestamps without WebCodecs', async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(window, 'VideoDecoder', { value: undefined, configurable: true }));
   await page.goto('/');
   await page.locator('#file').setInputFiles(fixture);
-  await expect(page.locator('#controls')).toBeEnabled();
+  await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
   await expect(page.locator('#timing-info')).toContainText('兼容解码');
   await page.locator('.fine-tune summary').click();
+  await expect(page.locator('.fine-tune')).toHaveAttribute('open', '');
   for (const [id, value] of Object.entries({ 'crop-x': '0', 'crop-y': '0', 'crop-width': '100', 'crop-height': '100', start: '0', end: '0.5' })) {
     await page.locator(`#${id}`).fill(value);
     await page.locator(`#${id}`).dispatchEvent('change');
