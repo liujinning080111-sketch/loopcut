@@ -1,4 +1,5 @@
 import type { Frame, Rect } from '../types';
+import { fitWithinSource, MAX_OUTPUT_SIDE } from './limits';
 
 const MAX_FILE_BYTES = 256 * 1024 * 1024;
 const WAIT_MS = 18000;
@@ -119,10 +120,10 @@ export async function openVideo(file: File, video: HTMLVideoElement, signal?: Ab
   }
 }
 
-export async function seekFrame(video: HTMLVideoElement, time: number, crop: Rect = { x: 0, y: 0, width: 1, height: 1 }, maxSide = 320, signal?: AbortSignal): Promise<Frame> {
+export async function seekFrame(video: HTMLVideoElement, time: number, crop: Rect = { x: 0, y: 0, width: 1, height: 1 }, maxSide = MAX_OUTPUT_SIDE, signal?: AbortSignal): Promise<Frame> {
   assertActive(signal);
   if (!Number.isFinite(video.duration) || !video.videoWidth) throw new Error('请先导入可播放的视频。');
-  if (!Number.isFinite(time) || !Number.isFinite(maxSide) || maxSide < 1 || maxSide > 320) throw new Error('帧时间或输出尺寸无效。');
+  if (!Number.isFinite(time) || !Number.isInteger(maxSide) || maxSide < 1 || maxSide > MAX_OUTPUT_SIDE) throw new Error('帧时间或输出尺寸无效。');
   if (![crop.x, crop.y, crop.width, crop.height].every(Number.isFinite) || crop.width <= 0 || crop.height <= 0) throw new Error('裁剪区域无效，请重新框选。');
   video.pause();
   const target = Math.max(0, Math.min(time, Math.max(0, video.duration - 0.001)));
@@ -141,14 +142,14 @@ export async function seekFrame(video: HTMLVideoElement, time: number, crop: Rec
   const sy = Math.min(video.videoHeight - 1, Math.max(0, Math.round(crop.y * video.videoHeight)));
   const sw = Math.min(video.videoWidth - sx, Math.max(1, Math.round(crop.width * video.videoWidth)));
   const sh = Math.min(video.videoHeight - sy, Math.max(1, Math.round(crop.height * video.videoHeight)));
-  const scale = Math.min(1, maxSide / Math.max(sw, sh));
-  const width = Math.max(1, Math.round(sw * scale));
-  const height = Math.max(1, Math.round(sh * scale));
+  const { width, height } = fitWithinSource(sw, sh, maxSide);
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) throw new Error('此浏览器无法创建画布，请重新打开 Safari。');
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
   context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
   const data = context.getImageData(0, 0, width, height).data;
   canvas.width = canvas.height = 1;

@@ -1,5 +1,6 @@
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import type { GifFrame } from '../types';
+import { MAX_GIF_BYTES, MAX_GIF_FRAMES, MAX_OUTPUT_SIDE } from './limits';
 
 /** Bounded encoder: one pending RGBA frame, its successor, and compressed output. */
 export class StreamingGifEncoder {
@@ -11,14 +12,22 @@ export class StreamingGifEncoder {
   private finished = false;
   private width = 0;
   private height = 0;
+  private maxBytes: number;
+
+  constructor(options: { maxBytes?: number } = {}) {
+    this.maxBytes = options.maxBytes ?? MAX_GIF_BYTES;
+    if (!Number.isInteger(this.maxBytes) || this.maxBytes < 128 || this.maxBytes > MAX_GIF_BYTES) {
+      throw new Error('GIF 文件大小上限无效。');
+    }
+  }
 
   push(frame: GifFrame): void {
     if (this.finished) throw new Error('GIF 已结束，不能继续添加画面。');
-    if (!Number.isInteger(frame.width) || !Number.isInteger(frame.height) || frame.width < 1 || frame.height < 1 || frame.width > 320 || frame.height > 320) throw new Error('GIF 尺寸必须在 1 至 320 像素之间。');
+    if (!Number.isInteger(frame.width) || !Number.isInteger(frame.height) || frame.width < 1 || frame.height < 1 || frame.width > MAX_OUTPUT_SIDE || frame.height > MAX_OUTPUT_SIDE) throw new Error(`GIF 尺寸必须在 1 至 ${MAX_OUTPUT_SIDE} 像素之间。`);
     if (frame.data.length !== frame.width * frame.height * 4) throw new Error('GIF 画面数据不完整。');
     if (!Number.isFinite(frame.delayMs) || frame.delayMs < 10 || frame.delayMs > 60000) throw new Error('GIF 单帧时长必须在 10 至 60000 毫秒之间。');
     if (this.frames && (this.width !== frame.width || this.height !== frame.height)) throw new Error('GIF 的画面尺寸必须保持一致。');
-    if (this.frames >= 360) throw new Error('GIF 超过 360 帧，请缩短片段或降低帧率。');
+    if (this.frames >= MAX_GIF_FRAMES) throw new Error(`GIF 超过 ${MAX_GIF_FRAMES} 帧，请缩短片段或降低帧率。`);
     this.width = frame.width;
     this.height = frame.height;
     this.frames++;
@@ -76,5 +85,11 @@ export class StreamingGifEncoder {
       palette, transparent: true, transparentIndex: 0, delay, repeat: 0, dispose: 2,
     });
     this.pending = undefined;
+    // Check the zero-copy view before finish() creates a duplicate output
+    // buffer. Reserve the one-byte GIF trailer. Never silently lower quality.
+    if (this.encoder.bytesView().byteLength + 1 > this.maxBytes) {
+      this.finished = true;
+      throw new Error('GIF 文件过大，已达到本次导出大小上限。请缩短片段或选择较小的长边尺寸后重试。');
+    }
   }
 }

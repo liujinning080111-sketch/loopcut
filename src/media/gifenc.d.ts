@@ -6,5 +6,6 @@ declare module 'gifenc' {
     writeFrame(indices: Uint8Array, width: number, height: number, options: { palette: Palette; transparent?: boolean; transparentIndex?: number; delay?: number; repeat?: number; dispose?: number }): void;
     finish(): void;
     bytes(): Uint8Array;
+    bytesView(): Uint8Array;
   };
 }

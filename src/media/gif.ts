@@ -48,7 +48,13 @@ export async function encodeGif(frames: AsyncIterable<GifFrame>, options: { sign
     check();
     const result = await request({ type: 'finish' });
     if (!result.bytes) throw new Error('GIF 编码没有返回文件。');
-    return new Blob([result.bytes.slice().buffer], { type: 'image/gif' });
+    // The worker transfers an owned, exact-length buffer; avoid another full
+    // GIF-sized JavaScript copy at high resolution before Blob snapshots it.
+    const { buffer, byteOffset, byteLength } = result.bytes;
+    const owned = byteOffset === 0 && byteLength === buffer.byteLength
+      ? buffer as ArrayBuffer
+      : buffer.slice(byteOffset, byteOffset + byteLength) as ArrayBuffer;
+    return new Blob([owned], { type: 'image/gif' });
   } finally {
     worker.terminate();
   }
