@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseGIF, decompressFrames } from 'gifuct-js';
 import { StreamingGifEncoder } from '../src/media/gif-core';
 import type { GifFrame } from '../src/types';
-import { fitWithinSource, MAX_GIF_BYTES, MAX_OUTPUT_SIDE } from '../src/media/limits';
+import { fitWithinSource, MAX_FRAME_PIXELS, MAX_GIF_BYTES, MAX_GIF_FRAMES, MAX_OUTPUT_SIDE } from '../src/media/limits';
 
 function frame(pixels: number[][], delayMs = 100): GifFrame {
   return { width: pixels.length, height: 1, data: new Uint8ClampedArray(pixels.flat()), delayMs };
@@ -10,8 +10,8 @@ function frame(pixels: number[][], delayMs = 100): GifFrame {
 const red = [255, 0, 0, 255];
 const clear = [0, 0, 0, 0];
 
-function encode(frames: GifFrame[]) {
-  const encoder = new StreamingGifEncoder();
+function encode(frames: GifFrame[], options = {}) {
+  const encoder = new StreamingGifEncoder(options);
   frames.forEach(f => encoder.push(f));
   const bytes = encoder.finish();
   const parsed = parseGIF(bytes.slice().buffer);
@@ -47,6 +47,21 @@ describe('GIF interoperability and timing', () => {
     expect(new Set(decoded.map(f => f.delay))).toEqual(new Set([60, 70]));
   });
 
+  it('retains every source frame at 60 fps when duplicate merging is disabled', () => {
+    const { decoded } = encode(Array.from({ length: 60 }, () => frame([red], 1000 / 60)), { mergeDuplicates: false });
+    expect(decoded).toHaveLength(60);
+    expect(decoded.reduce((sum, f) => sum + f.delay, 0)).toBe(1000);
+    expect(new Set(decoded.map(f => f.delay))).toEqual(new Set([10, 20]));
+  });
+
+  it('preserves all 255 subtle opaque colors instead of collapsing RGB565 buckets', () => {
+    const colors = Array.from({ length: 255 }, (_, i) => [17, 18, i, 255]);
+    const source = frame([...colors, clear]);
+    const { decoded } = encode([source]);
+    expect(Array.from(decoded[0].patch!)).toEqual(Array.from(source.data));
+    expect(new Set(Array.from(decoded[0].pixels)).size).toBe(256);
+  });
+
   it('handles fully transparent frames and does not alter caller data', () => {
     const source = frame([clear, clear]);
     const { decoded } = encode([source]);
@@ -61,9 +76,11 @@ describe('GIF interoperability and timing', () => {
     expect(() => encoder.push(frame([red, clear]))).toThrow('一致');
     expect(() => encoder.push({ ...frame([red]), data: new Uint8ClampedArray(0) })).toThrow('不完整');
     expect(() => encoder.push({ ...frame([red]), width: MAX_OUTPUT_SIDE + 1 })).toThrow(String(MAX_OUTPUT_SIDE));
+    expect(() => encoder.push({ ...frame([red]), width: MAX_OUTPUT_SIDE, height: Math.floor(MAX_FRAME_PIXELS / MAX_OUTPUT_SIDE) + 1 })).toThrow('预算');
+    expect(() => encoder.push(frame([red], 1000 / 300))).toThrow('APNG');
     const bounded = new StreamingGifEncoder();
-    for (let i = 0; i < 360; i++) bounded.push(frame([red]));
-    expect(() => bounded.push(frame([red]))).toThrow('360');
+    for (let i = 0; i < MAX_GIF_FRAMES; i++) bounded.push(frame([red]));
+    expect(() => bounded.push(frame([red]))).toThrow(String(MAX_GIF_FRAMES));
   });
 
   it('preserves real 640x480 source pixels, including one-pixel details, without resizing', () => {
@@ -87,12 +104,14 @@ describe('GIF interoperability and timing', () => {
     }
   });
 
-  it('keeps native small images small and only scales down beyond the chosen bound', () => {
+  it('preserves native dimensions by default and only resizes with an explicit choice', () => {
     expect(fitWithinSource(200, 150)).toEqual({ width: 200, height: 150 });
     expect(fitWithinSource(600, 600)).toEqual({ width: 600, height: 600 });
-    expect(fitWithinSource(1440, 1080)).toEqual({ width: 1024, height: 768 });
+    expect(fitWithinSource(1440, 1080)).toEqual({ width: 1440, height: 1080 });
     expect(fitWithinSource(600, 450, 320)).toEqual({ width: 320, height: 240 });
     expect(() => fitWithinSource(600, 450, MAX_OUTPUT_SIDE + 1)).toThrow('输出长边');
+    expect(() => fitWithinSource(MAX_OUTPUT_SIDE + 1, 1)).toThrow('没有缩图');
+    expect(() => fitWithinSource(MAX_OUTPUT_SIDE, MAX_OUTPUT_SIDE)).toThrow('没有缩图');
   });
 
   it('stops on a compressed-output budget instead of accumulating frames or lowering resolution', () => {
