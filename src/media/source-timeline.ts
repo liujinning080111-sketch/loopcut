@@ -34,7 +34,13 @@ export function sourceSchedule(samples: SourceSample[], start: number, end: numb
 
 export function fixedSchedule(start: number, end: number, fps: number): FrameStep[] {
   if (![start, end, fps].every(Number.isFinite) || end <= start || fps <= 0) throw new Error('帧率设置无效。');
-  const count = Math.ceil((end - start) * fps);
+  const frameCount = (end - start) * fps;
+  const nearest = Math.round(frameCount);
+  // Decimal times such as 0.1–0.4 can become 6.000000000000001 frames.
+  // Account for subtraction/multiplication roundoff, including offset times,
+  // without discarding a real partial final frame using a fixed time epsilon.
+  const roundoff = 4 * Number.EPSILON * Math.max(1, Math.abs(start) * fps, Math.abs(end) * fps);
+  const count = Math.max(1, Math.ceil(Math.abs(frameCount - nearest) <= roundoff ? nearest : frameCount));
   if (count > MAX_GIF_FRAMES) throw new Error('所选片段帧数过多，请缩短片段。');
   return Array.from({ length: count }, (_, i) => {
     const time = start + i / fps;
