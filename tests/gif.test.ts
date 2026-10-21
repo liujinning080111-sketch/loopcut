@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseGIF, decompressFrames } from 'gifuct-js';
 import { StreamingGifEncoder } from '../src/media/gif-core';
 import type { GifFrame } from '../src/types';
+import { fitWithinSource, MAX_GIF_BYTES, MAX_OUTPUT_SIDE } from '../src/media/limits';
 
 function frame(pixels: number[][], delayMs = 100): GifFrame {
   return { width: pixels.length, height: 1, data: new Uint8ClampedArray(pixels.flat()), delayMs };
@@ -59,9 +60,55 @@ describe('GIF interoperability and timing', () => {
     encoder.push(frame([red]));
     expect(() => encoder.push(frame([red, clear]))).toThrow('一致');
     expect(() => encoder.push({ ...frame([red]), data: new Uint8ClampedArray(0) })).toThrow('不完整');
-    expect(() => encoder.push({ ...frame([red]), width: 321 })).toThrow('320');
+    expect(() => encoder.push({ ...frame([red]), width: MAX_OUTPUT_SIDE + 1 })).toThrow(String(MAX_OUTPUT_SIDE));
     const bounded = new StreamingGifEncoder();
     for (let i = 0; i < 360; i++) bounded.push(frame([red]));
     expect(() => bounded.push(frame([red]))).toThrow('360');
+  });
+
+  it('preserves real 640x480 source pixels, including one-pixel details, without resizing', () => {
+    const width = 640, height = 480;
+    const nativeFrames = [0, 1].map(phase => {
+      const data = new Uint8ClampedArray(width * height * 4);
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        // Generated at native resolution, not enlarged from a thumbnail.
+        const value = (x + y + phase) % 2 === 0 ? 0 : 255;
+        data[i] = data[i + 1] = data[i + 2] = value;
+        data[i + 3] = 255;
+      }
+      return { width, height, data, delayMs: 50 };
+    });
+    const { parsed, decoded } = encode(nativeFrames);
+    expect([parsed.lsd.width, parsed.lsd.height]).toEqual([640, 480]);
+    expect(decoded).toHaveLength(2);
+    for (let i = 0; i < decoded.length; i++) {
+      expect(Buffer.from(decoded[i].patch!).equals(Buffer.from(nativeFrames[i].data))).toBe(true);
+    }
+  });
+
+  it('keeps native small images small and only scales down beyond the chosen bound', () => {
+    expect(fitWithinSource(200, 150)).toEqual({ width: 200, height: 150 });
+    expect(fitWithinSource(600, 600)).toEqual({ width: 600, height: 600 });
+    expect(fitWithinSource(1440, 1080)).toEqual({ width: 1024, height: 768 });
+    expect(fitWithinSource(600, 450, 320)).toEqual({ width: 320, height: 240 });
+    expect(() => fitWithinSource(600, 450, MAX_OUTPUT_SIDE + 1)).toThrow('输出长边');
+  });
+
+  it('stops on a compressed-output budget instead of accumulating frames or lowering resolution', () => {
+    const data = new Uint8ClampedArray(64 * 64 * 4);
+    let seed = 1234567;
+    for (let i = 0; i < data.length; i += 4) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      data[i] = seed & 255;
+      data[i + 1] = (seed >>> 8) & 255;
+      data[i + 2] = (seed >>> 16) & 255;
+      data[i + 3] = 255;
+    }
+    // A smaller injectable budget tests real encoded-byte accounting quickly.
+    const encoder = new StreamingGifEncoder({ maxBytes: 1024 });
+    encoder.push({ width: 64, height: 64, data, delayMs: 50 });
+    expect(() => encoder.finish()).toThrow('GIF 文件过大');
+    expect(() => new StreamingGifEncoder({ maxBytes: MAX_GIF_BYTES + 1 })).toThrow('大小上限无效');
   });
 });

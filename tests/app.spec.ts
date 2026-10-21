@@ -45,6 +45,7 @@ test('imports MP4, detects the loop, supports corrections and exports both GIF b
       input.value = value;
       input.dispatchEvent(new Event('input', { bubbles: true }));
     }, time);
+    await expect.poll(() => page.locator('#source-canvas').getAttribute('data-frame-time')).toBe(time);
     sampledPixels.push(await page.locator('#source-canvas').evaluate((canvas: HTMLCanvasElement) => {
       const x = Math.round(canvas.width * 80 / 360);
       const y = Math.round(canvas.height * 260 / 640);
@@ -56,7 +57,8 @@ test('imports MP4, detects the loop, supports corrections and exports both GIF b
   expect(motionDistance).toBeGreaterThan(2);
   expect(pixelDistance(sampledPixels[0], sampledPixels[2])).toBeLessThan(motionDistance * .3);
   await expect.poll(() => page.locator('#preview').evaluate((canvas: HTMLCanvasElement) => {
-    if (canvas.width > 200 || canvas.height > 200) return 0;
+    // A 600px native sticker must retain enough pixels for a sharp preview.
+    if (canvas.width < 500 || canvas.height < 500) return 0;
     return canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data.filter((_, i) => i % 4 === 3 && _ > 0).length;
   })).toBeGreaterThan(10);
 
@@ -70,8 +72,8 @@ test('imports MP4, detects the loop, supports corrections and exports both GIF b
   await page.locator('[data-mode="rectangle"]').click();
   const rectangle = await exported(page);
   expect(rectangle.frames.reduce((total, frame) => total + frame.delay, 0)).toBe(2000);
-  expect(rectangle.gif.lsd.width).toBeGreaterThanOrEqual(199);
-  expect(rectangle.gif.lsd.width).toBeLessThanOrEqual(201);
+  expect(rectangle.gif.lsd.width).toBeGreaterThanOrEqual(599);
+  expect(rectangle.gif.lsd.width).toBeLessThanOrEqual(601);
   expect(rectangle.frames[0].patch!.filter((value, index) => index % 4 === 3 && value === 0).length).toBe(0);
 
   const downloadPromise = page.waitForEvent('download');
@@ -99,6 +101,10 @@ test('imports MP4, detects the loop, supports corrections and exports both GIF b
   await expect(page.locator('#result')).toBeHidden();
   const fractional = await exported(page);
   expect(fractional.frames.reduce((total, frame) => total + frame.delay, 0)).toBe(1070);
+  // Smaller files are an explicit choice, never the default silent reduction.
+  await page.locator('#size').selectOption('320');
+  const compact = await exported(page);
+  expect(Math.max(compact.gif.lsd.width, compact.gif.lsd.height)).toBe(320);
   expect(errors).toEqual([]);
 });
 
