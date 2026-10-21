@@ -16,52 +16,62 @@ import imageio_ffmpeg
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "public" / "demo.mp4"
-WIDTH, HEIGHT, FPS = 360, 640, 15
-LOOP_FRAMES, LOOPS = 30, 3
+SCALE = 3
+WIDTH, HEIGHT, FPS = 360 * SCALE, 640 * SCALE, 30
+LOOP_FRAMES, LOOPS = 60, 3
+STICKER_X, STICKER_Y, STICKER_WIDTH, STICKER_HEIGHT = 240, 780, 600, 600
+
+
+def coordinates(values: tuple[float, ...]) -> tuple[float, ...]:
+    """Scale vector coordinates before drawing, never resize a raster image."""
+    return tuple(value * SCALE for value in values)
 
 
 def draw_frame(index: int) -> Image.Image:
     image = Image.new("RGB", (WIDTH, HEIGHT), "#f4f5f8")
     draw = ImageDraw.Draw(image)
-    font = ImageFont.load_default(size=20)
-    small = ImageFont.load_default(size=12)
-    draw.rounded_rectangle((0, 0, 359, 80), radius=16, fill="#ffffff")
-    draw.text((24, 24), "Comments", font=font, fill="#20283b")
-    draw.text((24, 55), "A synthetic recording for LoopCut", font=small, fill="#8b92a4")
+    # Every shape, stroke and font is rasterized directly at 1080 × 1920.
+    # There is no low-resolution intermediate or image.resize() operation.
+    font = ImageFont.load_default(size=20 * SCALE)
+    small = ImageFont.load_default(size=12 * SCALE)
+    draw.rounded_rectangle((0, 0, WIDTH - 1, 80 * SCALE), radius=16 * SCALE, fill="#ffffff")
+    draw.text(coordinates((24, 24)), "Comments", font=font, fill="#20283b")
+    draw.text(coordinates((24, 55)), "A synthetic recording for LoopCut", font=small, fill="#8b92a4")
     for y, color, widths in [(115, "#c9d7f8", [170, 230]), (210, "#e2cbf5", [140]), (505, "#bfe5d8", [196, 150])]:
-        draw.ellipse((22, y, 54, y + 32), fill=color)
-        draw.rounded_rectangle((72, y + 3, 148, y + 10), radius=3, fill="#a8afbd")
+        draw.ellipse(coordinates((22, y, 54, y + 32)), fill=color)
+        draw.rounded_rectangle(coordinates((72, y + 3, 148, y + 10)), radius=3 * SCALE, fill="#a8afbd")
         for row, width in enumerate(widths):
-            draw.rounded_rectangle((72, y + 22 + row * 14, 72 + width, y + 28 + row * 14), radius=3, fill="#d1d6df")
-    draw.rounded_rectangle((24, 590, 336, 626), radius=18, fill="#ffffff")
-    draw.text((44, 602), "Write a comment...", font=small, fill="#9ba2b0")
+            draw.rounded_rectangle(coordinates((72, y + 22 + row * 14, 72 + width, y + 28 + row * 14)), radius=3 * SCALE, fill="#d1d6df")
+    draw.rounded_rectangle(coordinates((24, 590, 336, 626)), radius=18 * SCALE, fill="#ffffff")
+    draw.text(coordinates((44, 602)), "Write a comment...", font=small, fill="#9ba2b0")
 
-    # Known sticker canvas: x=80, y=260, width=200, height=200.
+    # Known native sticker canvas: x=240, y=780, width=600, height=600.
     # The untouched white border is a reliable background-keying reference.
-    draw.rectangle((80, 260, 279, 459), fill="#ffffff")
+    draw.rectangle((STICKER_X, STICKER_Y,
+                    STICKER_X + STICKER_WIDTH - 1, STICKER_Y + STICKER_HEIGHT - 1), fill="#ffffff")
     phase = 2 * math.pi * (index % LOOP_FRAMES) / LOOP_FRAMES
     cx, cy = 177, 363 + 4 * math.sin(phase)
     yellow, outline, ink = "#ffcf4b", "#e4ac30", "#36364b"
     # The face bobs slightly; its body remains present throughout the animation.
-    draw.ellipse((cx - 54, cy - 54, cx + 54, cy + 54), fill=yellow, outline=outline, width=2)
-    draw.ellipse((cx - 30, cy + 44, cx - 9, cy + 59), fill=yellow, outline=outline, width=2)
-    draw.ellipse((cx + 9, cy + 44, cx + 30, cy + 59), fill=yellow, outline=outline, width=2)
+    draw.ellipse(coordinates((cx - 54, cy - 54, cx + 54, cy + 54)), fill=yellow, outline=outline, width=2 * SCALE)
+    draw.ellipse(coordinates((cx - 30, cy + 44, cx - 9, cy + 59)), fill=yellow, outline=outline, width=2 * SCALE)
+    draw.ellipse(coordinates((cx + 9, cy + 44, cx + 30, cy + 59)), fill=yellow, outline=outline, width=2 * SCALE)
     # Once-per-cycle blink disambiguates the complete loop from half a wave.
-    blink = 12 <= index % LOOP_FRAMES <= 14
+    blink = 24 <= index % LOOP_FRAMES < 30
     for x in [cx - 18, cx + 18]:
         if blink:
-            draw.line((x - 5, cy - 12, x + 5, cy - 12), fill=ink, width=4)
+            draw.line(coordinates((x - 5, cy - 12, x + 5, cy - 12)), fill=ink, width=4 * SCALE)
         else:
-            draw.ellipse((x - 4, cy - 19, x + 4, cy - 6), fill=ink)
-    draw.arc((cx - 22, cy - 8, cx + 22, cy + 28), start=10, end=170, fill=ink, width=4)
-    draw.ellipse((cx - 37, cy + 3, cx - 23, cy + 10), fill="#f5ab60")
-    draw.ellipse((cx + 23, cy + 3, cx + 37, cy + 10), fill="#f5ab60")
+            draw.ellipse(coordinates((x - 4, cy - 19, x + 4, cy - 6)), fill=ink)
+    draw.arc(coordinates((cx - 22, cy - 8, cx + 22, cy + 28)), start=10, end=170, fill=ink, width=4 * SCALE)
+    draw.ellipse(coordinates((cx - 37, cy + 3, cx - 23, cy + 10)), fill="#f5ab60")
+    draw.ellipse(coordinates((cx + 23, cy + 3, cx + 37, cy + 10)), fill="#f5ab60")
     hx, hy = 244 + 9 * math.sin(phase), 316 + 17 * math.cos(phase)
-    draw.line((cx + 46, cy + 8, hx, hy), fill=outline, width=15)
-    draw.line((cx + 46, cy + 8, hx, hy), fill=yellow, width=11)
-    draw.ellipse((hx - 12, hy - 12, hx + 12, hy + 12), fill=yellow, outline=outline, width=2)
-    draw.line((hx - 5, hy - 8, hx - 3, hy), fill=outline, width=2)
-    draw.line((hx + 2, hy - 9, hx + 3, hy), fill=outline, width=2)
+    draw.line(coordinates((cx + 46, cy + 8, hx, hy)), fill=outline, width=15 * SCALE)
+    draw.line(coordinates((cx + 46, cy + 8, hx, hy)), fill=yellow, width=11 * SCALE)
+    draw.ellipse(coordinates((hx - 12, hy - 12, hx + 12, hy + 12)), fill=yellow, outline=outline, width=2 * SCALE)
+    draw.line(coordinates((hx - 5, hy - 8, hx - 3, hy)), fill=outline, width=2 * SCALE)
+    draw.line(coordinates((hx + 2, hy - 9, hx + 3, hy)), fill=outline, width=2 * SCALE)
     return image
 
 
@@ -70,8 +80,8 @@ def main() -> None:
     command = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error",
                "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{WIDTH}x{HEIGHT}",
                "-r", str(FPS), "-i", "pipe:0", "-an", "-c:v", "libx264",
-               "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p",
-               "-crf", "23", "-preset", "medium", "-movflags", "+faststart", str(OUTPUT)]
+               "-profile:v", "high", "-level:v", "4.1", "-pix_fmt", "yuv420p",
+               "-crf", "18", "-preset", "medium", "-movflags", "+faststart", str(OUTPUT)]
     process = subprocess.Popen(command, stdin=subprocess.PIPE)
     assert process.stdin is not None
     try:
@@ -81,8 +91,8 @@ def main() -> None:
         process.stdin.close()
     if process.wait() != 0:
         raise RuntimeError("Fixture encoding failed")
-    if OUTPUT.stat().st_size >= 300_000:
-        raise RuntimeError("Fixture exceeds the 300 kB budget")
+    if OUTPUT.stat().st_size >= 1024 * 1024:
+        raise RuntimeError("Fixture exceeds the 1 MiB budget")
     print(f"{OUTPUT}: {OUTPUT.stat().st_size} bytes; {WIDTH}x{HEIGHT}; {FPS} fps; 6 s; 2 s loop × 3")
 
 
