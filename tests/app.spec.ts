@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { parseGIF, decompressFrames } from 'gifuct-js';
+import { compositeGif } from './helpers/gif-composite';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -23,9 +23,13 @@ async function exported(page: Page) {
   });
   expect(file.type).toBe('image/gif');
   const bytes = new Uint8Array(file.bytes);
-  const gif = parseGIF(bytes.buffer);
-  const frames = decompressFrames(gif, true);
+  const gif = compositeGif(bytes);
+  const frames = gif.frames.slice(0, gif.frameCount);
   expect(frames.length).toBeGreaterThan(1);
+  expect(gif.loopCount).toBe(0);
+  for (let i = 0; i < gif.frameCount; i++) {
+    expect(Buffer.from(gif.frames[i + gif.frameCount].rgba).equals(Buffer.from(frames[i].rgba)), `Loop 2 frame ${i} must match loop 1 without stale pixels`).toBe(true);
+  }
   return { bytes, gif, frames };
 }
 
@@ -65,7 +69,10 @@ test('imports MP4, detects the loop, supports corrections and exports both GIF b
   // Independently known source coordinates exercise manual correction instead
   // of treating the detector's own crop as test ground truth.
   await page.locator('.fine-tune summary').click();
-  for (const [id, value] of Object.entries({ 'crop-x': '22.2', 'crop-y': '40.6', 'crop-width': '55.6', 'crop-height': '31.3', start: '0', end: '2' })) {
+  // The app now refuses saving over 500000 bytes without degrading pixels.
+  // Explicitly select a one-second excerpt; never lower native size or fps.
+  // Actual over-budget input is covered separately in gif-budget.spec.ts.
+  for (const [id, value] of Object.entries({ 'crop-x': '22.2', 'crop-y': '40.6', 'crop-width': '55.6', 'crop-height': '31.3', start: '0', end: '1' })) {
     await page.locator(`#${id}`).fill(value);
     await page.locator(`#${id}`).dispatchEvent('change');
   }
@@ -73,11 +80,12 @@ test('imports MP4, detects the loop, supports corrections and exports both GIF b
   await expect(page.locator('#fps')).toHaveValue('0');
   await expect(page.locator('#timing-info')).toContainText('30 fps');
   const rectangle = await exported(page);
-  expect(rectangle.frames).toHaveLength(60);
-  expect(rectangle.frames.reduce((total, frame) => total + frame.delay, 0)).toBe(2000);
-  expect(rectangle.gif.lsd.width).toBeGreaterThanOrEqual(599);
-  expect(rectangle.gif.lsd.width).toBeLessThanOrEqual(601);
-  expect(rectangle.frames[0].patch!.filter((value, index) => index % 4 === 3 && value === 0).length).toBe(0);
+  expect(rectangle.frames).toHaveLength(30);
+  expect(rectangle.frames.reduce((total, frame) => total + frame.delayMs, 0)).toBe(1000);
+  expect(rectangle.bytes.length).toBeLessThanOrEqual(500_000);
+  expect(rectangle.gif.width).toBeGreaterThanOrEqual(599);
+  expect(rectangle.gif.width).toBeLessThanOrEqual(601);
+  expect(rectangle.frames[0].rgba.filter((value, index) => index % 4 === 3 && value === 0).length).toBe(0);
 
   const downloadPromise = page.waitForEvent('download');
   await page.locator('#download').click();
@@ -92,11 +100,14 @@ test('imports MP4, detects the loop, supports corrections and exports both GIF b
   await expect(page.locator('#gif-preview')).toHaveAttribute('hidden', '');
   await expect(page.locator('#download')).not.toHaveAttribute('href');
   const transparent = await exported(page);
-  const alpha = transparent.frames[0].patch!.filter((_, i) => i % 4 === 3);
+  const alpha = transparent.frames[0].rgba.filter((_, i) => i % 4 === 3);
   expect(alpha.filter(a => a === 0).length).toBeGreaterThan(100);
   expect(alpha.filter(a => a === 255).length).toBeGreaterThan(100);
-  expect(transparent.frames.every(frame => frame.disposalType === 2)).toBe(true);
-  expect(transparent.frames.reduce((total, frame) => total + frame.delay, 0)).toBe(2000);
+  // An equivalent delta GIF can change disposal values. The exported() helper
+  // verifies actual full-canvas pixels across the loop seam instead.
+  expect(transparent.frames).toHaveLength(30);
+  expect(transparent.frames.reduce((total, frame) => total + frame.delayMs, 0)).toBe(1000);
+  expect(transparent.bytes.length).toBeLessThanOrEqual(500_000);
   // A valid manual endpoint need not land on the selected frame-rate grid.
   // This previously could create a sub-10ms last frame and reject export.
   await page.locator('#fps').selectOption('20');
@@ -104,11 +115,11 @@ test('imports MP4, detects the loop, supports corrections and exports both GIF b
   await page.locator('#end').dispatchEvent('change');
   await expect(page.locator('#result')).toBeHidden();
   const fractional = await exported(page);
-  expect(fractional.frames.reduce((total, frame) => total + frame.delay, 0)).toBe(1070);
+  expect(fractional.frames.reduce((total, frame) => total + frame.delayMs, 0)).toBe(1070);
   // Smaller files are an explicit choice, never the default silent reduction.
   await page.locator('#size').selectOption('320');
   const compact = await exported(page);
-  expect(Math.max(compact.gif.lsd.width, compact.gif.lsd.height)).toBe(320);
+  expect(Math.max(compact.gif.width, compact.gif.height)).toBe(320);
   expect(errors).toEqual([]);
 });
 

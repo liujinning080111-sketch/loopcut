@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { parseGIF, decompressFrames } from 'gifuct-js';
+import { compositeGif } from './helpers/gif-composite';
 import { fileURLToPath } from 'node:url';
 
 const fixture = fileURLToPath(new URL('./fixtures/native-120.mp4', import.meta.url));
@@ -35,11 +35,12 @@ test('keeps every 120fps source frame and discloses GIF duration increasing from
   await expect(page.locator('#status')).not.toHaveClass(/error/);
 
   const bytes = new Uint8Array(await page.locator('#gif-preview').evaluate(async (image: HTMLImageElement) => Array.from(new Uint8Array(await (await fetch(image.src)).arrayBuffer()))));
-  const parsed = parseGIF(bytes.buffer), frames = decompressFrames(parsed, true);
-  expect([parsed.lsd.width, parsed.lsd.height]).toEqual([1280, 32]);
-  expect(frames).toHaveLength(30);
-  expect(frames.map(frame => identify(frame.patch!, 1280))).toEqual(Array.from({ length: 30 }, (_, i) => i));
-  expect(frames.map(frame => frame.delay)).toEqual(new Array(30).fill(10));
-  expect(frames.reduce((duration, frame) => duration + frame.delay, 0)).toBe(300);
+  const gif = compositeGif(bytes);
+  expect([gif.width, gif.height]).toEqual([1280, 32]);
+  expect(gif.frameCount).toBe(30);
+  expect(gif.loopCount).toBe(0);
+  expect(gif.frames.map(frame => identify(frame.rgba, 1280))).toEqual(Array.from({ length: 60 }, (_, i) => i % 30));
+  expect(gif.delaysMs).toEqual(new Array(30).fill(10));
+  expect(gif.durationMs).toBe(300);
   await expect(page.locator('#download')).toHaveAttribute('download', /\.gif$/);
 });
