@@ -15,6 +15,7 @@ LoopCut 是 Vite + TypeScript 的无框架静态 Web App。Mediabunny 读取本�
   → 从 Canvas 读取原尺寸选区像素（或用户主动指定缩减）
   → 可选去背景
   → Worker 逐帧 GIF 量化编码 / APNG RGBA 编码
+  → GIF 无损差分优化及两轮合成验证 → 最终 500,000 字节保存闸门
   → Blob / File
   → 用户点击分享、下载或打开
 ```
@@ -30,6 +31,8 @@ LoopCut 是 Vite + TypeScript 的无框架静态 Web App。Mediabunny 读取本�
 | `src/media/limits.ts` | 原尺寸计算与资源上限；超出时失败，不能暗中缩减 |
 | `src/media/gif-core.ts` | 可测试的 GIF 编码器、时间量化与重复帧合并 |
 | `src/media/gif-timing.ts` | 整段 GIF 延时分配、短帧协调与文件时长变化说明 |
+| `src/media/gif-optimizer.ts` | 多候选精确像素差分、调色板重映射、LZW 码深优化及两轮合成验证 |
+| `src/media/gif-size.ts` | 最终 GIF 的十进制 500 KB 保存闸门 |
 | `src/media/gif.worker.ts` | Worker 消息协议与编码执行 |
 | `src/media/gif.ts` | 主线程编码入口、逐帧传输、确认、超时及 Worker 清理 |
 | `src/media/apng*.ts` | APNG 编码、每帧延时与 Worker 协议 |
@@ -105,6 +108,10 @@ GIF 编码用 `gifenc` 量化索引颜色。保留独立透明索引，透明像
 APNG 使用 PNG 的 RGBA 色型，保存传入编码器的解码后 8-bit RGBA，不做 GIF 的 256 色量化。延时由两个 16-bit 整数的秒分数表示，常见 30 / 60 / 29.97 fps 可表达；一般 VFR 的有理数可能超出字段范围，精度受编码器实际分数处理限制。极高帧率还受播放器短延时钳制与屏幕刷新影响。Canvas 色彩转换、HDR 到 SDR 映射及录屏先前的有损压缩均不在 APNG 无损承诺内。
 
 默认原帧导出保留每一个选区内源帧，包括重复画面和其停顿；不自动合并来改变帧数。循环去重仅选择一轮时间段。GIF 核心保留可选的相邻重复帧合并能力，若其他调用启用，必须累加延迟；不能把它与默认保留全部帧混为一谈。
+
+GIF 初次编码后，在同一个可取消的 Worker 中用固定 `omggif@1.0.10`（MIT）执行无损后处理。全幅最小码深、变化矩形、透明化不变像素等候选保留相同帧数、每帧延时与循环次数；透明像素不代表擦除，因此需按后续帧选择清除矩形，并核对循环尾到首帧。每个更小候选必须与原 GIF 连续两轮完整 RGBA 一致，才允许采用。不做二次量化、缩图、合并重复帧或 FPS 变更；重复帧可写成保持同样延时的空更新帧。[omggif 源码](https://github.com/deanm/omggif/blob/master/omggif.js)
+
+优化有单独的计算量和活跃缓冲预算，未完成或无收益时保留原 GIF；主线程超时与取消都会终止 Worker。无论是否有优化收益，最终字节数都须经过 `assertGifSize` 的 `<= 500_000` 检查，再构造 File 和保存链接。超限保留编辑器，说明实际大小并拒绝保存；不能自动删帧、缩图或减色以凑上限。该上限仅用于本项目 GIF 保存，APNG 不受此 500 KB 策略影响。
 
 编码完成后再构造正确 MIME 的 File（GIF 为 image/gif；APNG 按生成文件标注）。分享按钮的点击处理程序应先检查最终文件的 `canShare`，随即调用 `navigator.share`；不要把编码放在点击处理中的长异步链之后再请求分享。用户取消分享不应清除导出结果，也不能被记录为“已存入照片”。
 

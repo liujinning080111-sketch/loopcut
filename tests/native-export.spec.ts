@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { parseGIF, decompressFrames } from 'gifuct-js';
+import { compositeGif } from './helpers/gif-composite';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
 
@@ -33,12 +33,12 @@ test('preserves 1280 native pixels and every 60fps source frame in GIF and APNG'
     return Buffer.from(await page.locator('#gif-preview').evaluate(async (image: HTMLImageElement) => Array.from(new Uint8Array(await (await fetch(image.src)).arrayBuffer()))));
   };
   const gifBytes = await exportBytes();
-  const gif = parseGIF(gifBytes.buffer.slice(gifBytes.byteOffset, gifBytes.byteOffset + gifBytes.byteLength));
-  const gifFrames = decompressFrames(gif, true);
-  expect([gif.lsd.width, gif.lsd.height]).toEqual([1280, 32]);
-  expect(gifFrames).toHaveLength(30);
-  expect(gifFrames.map(frame => identify(frame.patch!, 1280))).toEqual(Array.from({ length: 30 }, (_, i) => i));
-  expect(gifFrames.reduce((n, frame) => n + frame.delay, 0)).toBe(500);
+  const gif = compositeGif(gifBytes);
+  expect([gif.width, gif.height]).toEqual([1280, 32]);
+  expect(gif.frameCount).toBe(30);
+  expect(gif.loopCount).toBe(0);
+  expect(gif.frames.map(frame => identify(frame.rgba, 1280))).toEqual(Array.from({ length: 60 }, (_, i) => i % 30));
+  expect(gif.durationMs).toBe(500);
 
   await page.locator('#format').selectOption('apng');
   await expect(page.locator('#result')).toBeHidden();
@@ -70,10 +70,12 @@ test('preserves 1280 native pixels and every 60fps source frame in GIF and APNG'
   await expect(page.locator('#result')).toBeVisible();
   await expect(page.locator('#status')).toContainText('短帧时间已自动协调');
   const shortBytes = new Uint8Array(await page.locator('#gif-preview').evaluate(async (image: HTMLImageElement) => Array.from(new Uint8Array(await (await fetch(image.src)).arrayBuffer()))));
-  const shortFrames = decompressFrames(parseGIF(shortBytes.buffer), true);
-  expect(shortFrames.map(frame => identify(frame.patch!,1280))).toEqual(Array.from({length:8},(_,i)=>i));
-  expect(shortFrames.every(frame=>frame.delay>=10)).toBe(true);
-  expect(shortFrames.reduce((n,frame)=>n+frame.delay,0)).toBe(120);
+  const shortGif = compositeGif(shortBytes);
+  expect(shortGif.frameCount).toBe(8);
+  expect(shortGif.loopCount).toBe(0);
+  expect(shortGif.frames.map(frame => identify(frame.rgba,1280))).toEqual(Array.from({length:16},(_,i)=>i%8));
+  expect(shortGif.delaysMs.every(delay=>delay>=10)).toBe(true);
+  expect(shortGif.durationMs).toBe(120);
   await expect(page.locator('#result-meta')).toContainText('8 帧');
   await expect(page.locator('#result-meta')).toContainText('0.12 s');
   await expect(page.locator('#controls')).not.toHaveAttribute('disabled', '');
@@ -95,8 +97,10 @@ test('compatibility decoder follows all source timestamps without WebCodecs', as
   await page.locator('#export').click();
   await expect(page.locator('#result')).toBeVisible();
   const bytes = new Uint8Array(await page.locator('#gif-preview').evaluate(async (image: HTMLImageElement) => Array.from(new Uint8Array(await (await fetch(image.src)).arrayBuffer()))));
-  const gif = parseGIF(bytes.buffer), frames = decompressFrames(gif, true);
-  expect([gif.lsd.width, gif.lsd.height]).toEqual([1280, 32]);
-  expect(frames.map(frame => identify(frame.patch!, 1280))).toEqual(Array.from({ length: 30 }, (_, i) => i));
-  expect(frames.reduce((n, frame) => n + frame.delay, 0)).toBe(500);
+  const gif = compositeGif(bytes);
+  expect([gif.width, gif.height]).toEqual([1280, 32]);
+  expect(gif.frameCount).toBe(30);
+  expect(gif.loopCount).toBe(0);
+  expect(gif.frames.map(frame => identify(frame.rgba, 1280))).toEqual(Array.from({ length: 60 }, (_, i) => i % 30));
+  expect(gif.durationMs).toBe(500);
 });

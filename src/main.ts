@@ -3,6 +3,7 @@ import type { Background, BackgroundMode, Frame, GifFrame, Rect, Region } from '
 import { detectLoop, detectRegions, inspectBackground, removeBackground } from './core/vision';
 import { openVideo, sampleFrames, seekFrame } from './media/video';
 import { encodeGif } from './media/gif';
+import { assertGifSize, gifKilobytes } from './media/gif-size';
 import { planGifTiming } from './media/gif-timing';
 import { encodeApng } from './media/apng';
 import { readSourceTimeline, sourceSchedule, fixedSchedule, originalFrames, type SourceTimeline } from './media/source-timeline';
@@ -80,6 +81,7 @@ function updateExportInfo() {
   setText('export',`生成 ${kind}`);
   setText('share',kind==='GIF'?'保存到相册':`分享 ${kind}`);
   $('save-guide').hidden=kind!=='GIF';
+  $('gif-size-policy').hidden=kind!=='GIF';
   const geometry=number('size')===0?'保留原尺寸':`按所选 ${number('size')} px 长边缩小，不放大小图`;
   const cadence=number('fps')===0?'按原时间轴逐帧读取':`按所选 ${number('fps')} fps 采样`;
   let note = `${geometry}，${cadence}。`+(kind === 'GIF' ? 'GIF 仍会限制颜色，帧时间按 0.01 秒取整。' : 'APNG 无损保存解码后的画面，但不保证能作为微信表情。');
@@ -106,6 +108,7 @@ function invalidate() {
   if(resultUrl) URL.revokeObjectURL(resultUrl);
   resultUrl = ''; outputFile = undefined;
   $('result').hidden = true; $('gif-preview').hidden = true;
+  $('compression-note').textContent='';
   $<HTMLImageElement>('gif-preview').removeAttribute('src');
   $('download').removeAttribute('href');
   previewCanvas.hidden = false;refreshPreview();$('preview-label').textContent = '高清编辑预览 · 约 8 fps';
@@ -388,7 +391,15 @@ $('export').addEventListener('click',()=>void task(async signal=>{
     if(i!==count)throw new Error('原始帧未完整导出。');
   }
   const onProgress=(n:number)=>progress(`正在生成 ${kind} ${n}/${count} 帧`,n/count);
-  const blob=kind==='APNG'?await encodeApng(exportFrames(),{frameCount:count,signal,onProgress}):await encodeGif(exportFrames(),{signal,onProgress,mergeDuplicates:false});
+  let compression: { originalBytes:number; optimizedBytes:number; optimized?:boolean; reason?:string } | undefined;
+  const blob=kind==='APNG'?await encodeApng(exportFrames(),{frameCount:count,signal,onProgress}):await encodeGif(exportFrames(),{
+    signal,onProgress,mergeDuplicates:false,
+    onPhase:()=>progress('正在无损压缩 GIF，保留画面与全部帧…',1),
+    onOptimization:stats=>{compression=stats;},
+  });
+  // Validate the finished, optimized bytes before creating any save/share link.
+  // Never meet the ceiling by silently changing dimensions, colors or frames.
+  if(kind==='GIF')assertGifSize(blob.size,Boolean(compression?.reason));
   signal.throwIfAborted();outputFile=new File([blob],`loopcut-${new Date().toISOString().slice(0,10)}.${kind==='APNG'?'png':'gif'}`,{type:blob.type});resultUrl=URL.createObjectURL(outputFile);
   const img=$<HTMLImageElement>('gif-preview');img.src=resultUrl;img.alt=`已生成的 ${kind} 预览`;img.hidden=false;previewCanvas.hidden=true;
   $('preview-label').textContent=`实际 ${kind} 预览`;playing=true;$('play-toggle').textContent='Ⅱ';$('play-toggle').setAttribute('aria-label','暂停预览');
@@ -396,7 +407,12 @@ $('export').addEventListener('click',()=>void task(async signal=>{
   $<HTMLAnchorElement>('download').download=outputFile.name;
   $('result-title').textContent=`${kind} 已准备好`;
   const outputSeconds=gifTiming?gifTiming.outputDurationMs/1000:end-start;
-  $('result-meta').textContent=`${outputWidth} × ${outputHeight} px · ${count} 帧 · ${(blob.size/1024).toFixed(0)} KB · ${fmt(outputSeconds)} s · ${isTransparent?'透明':'矩形'}`;
+  $('result-meta').textContent=`${outputWidth} × ${outputHeight} px · ${count} 帧 · ${gifKilobytes(blob.size)} KB · ${fmt(outputSeconds)} s · ${isTransparent?'透明':'矩形'}`;
+  $('compression-note').textContent=kind==='GIF'&&compression
+    ? compression.reason
+      ? `无损优化未全部完成：${gifKilobytes(compression.originalBytes)} → ${gifKilobytes(blob.size)} KB。已保留验证一致的文件，仍在 500 KB 内。`
+      : `无损优化：${gifKilobytes(compression.originalBytes)} → ${gifKilobytes(blob.size)} KB，减少 ${Math.max(0,100*(1-blob.size/compression.originalBytes)).toFixed(1)}%。尺寸、画面与帧时间未因压缩改变。`
+    : '';
   $('result').hidden=false;
   let canShare=false;try{canShare=!!navigator.canShare?.({files:[outputFile]});}catch{/* downloads remain available */}
   $('share-note').textContent=inAppBrowser?'当前 App 内置浏览器存不了会动的 GIF，请用右上角菜单「在浏览器打开」。':canShare?'请勿长按预览图保存，那样只能存下静止的一帧。':'此浏览器不能直接存到相册，将以文件下载。请勿长按预览图保存。';

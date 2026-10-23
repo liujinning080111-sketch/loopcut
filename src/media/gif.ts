@@ -1,9 +1,10 @@
 import type { GifFrame } from '../types';
 import type { GifEncodingOptions } from './gif-core';
+import type { GifOptimizationStats } from './gif-optimizer';
 
-type Reply = { id: number; type: 'ack' | 'done' | 'error'; bytes?: Uint8Array; message?: string };
+type Reply = { id: number; type: 'ack' | 'done' | 'error' | 'phase'; bytes?: Uint8Array; message?: string; stats?: GifOptimizationStats };
 
-export async function encodeGif(frames: AsyncIterable<GifFrame>, options: GifEncodingOptions & { signal?: AbortSignal; onProgress?: (count: number) => void } = {}): Promise<Blob> {
+export async function encodeGif(frames: AsyncIterable<GifFrame>, options: GifEncodingOptions & { signal?: AbortSignal; onProgress?: (count: number) => void; onPhase?: (phase: 'optimizing') => void; onOptimization?: (stats: GifOptimizationStats) => void } = {}): Promise<Blob> {
   const { signal, onProgress } = options;
   const check = () => { if (signal?.aborted) throw new DOMException('已取消处理', 'AbortError'); };
   check();
@@ -23,6 +24,7 @@ export async function encodeGif(frames: AsyncIterable<GifFrame>, options: GifEnc
       };
       const message = (event: MessageEvent<Reply>) => {
         if (event.data.id !== id) return;
+        if (event.data.type === 'phase') { options.onPhase?.('optimizing'); return; }
         cleanup();
         if (event.data.type === 'error') reject(new Error(event.data.message ?? 'GIF 编码失败。'));
         else resolve(event.data);
@@ -50,6 +52,7 @@ export async function encodeGif(frames: AsyncIterable<GifFrame>, options: GifEnc
     check();
     const result = await request({ type: 'finish' });
     if (!result.bytes) throw new Error('GIF 编码没有返回文件。');
+    if (result.stats) options.onOptimization?.(result.stats);
     // The worker transfers an owned, exact-length buffer; avoid another full
     // GIF-sized JavaScript copy at high resolution before Blob snapshots it.
     const { buffer, byteOffset, byteLength } = result.bytes;

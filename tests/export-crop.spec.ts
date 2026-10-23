@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { parseGIF, decompressFrames } from 'gifuct-js';
+import { compositeGif } from './helpers/gif-composite';
 import { fileURLToPath } from 'node:url';
 
 const demo = fileURLToPath(new URL('../public/demo.mp4', import.meta.url));
@@ -67,15 +67,19 @@ async function checkExport(page: Page, expectedGrid: number[], dimensions: [numb
   await expect(page.locator('#result')).toBeVisible();
   const bytes = new Uint8Array(await page.locator('#gif-preview').evaluate(async (image: HTMLImageElement) =>
     Array.from(new Uint8Array(await (await fetch(image.src)).arrayBuffer()))));
-  const gif = parseGIF(bytes.buffer), frames = decompressFrames(gif, true);
-  expect([gif.lsd.width, gif.lsd.height]).toEqual(dimensions);
-  expect(frames).toHaveLength(3);
-  for (const frame of frames) {
-    const coverage = colorCoverage(frame.patch!);
+  const gif = compositeGif(bytes);
+  expect([gif.width, gif.height]).toEqual(dimensions);
+  expect(gif.frameCount).toBe(3);
+  expect(gif.loopCount).toBe(0);
+  for (const frame of gif.frames) {
+    const coverage = colorCoverage(frame.rgba);
     expect(coverage.yellow, 'The selected face must fill the crop, not shrink to the full-screen recording ratio').toBeGreaterThan(.3);
     expect(coverage.outsideMarkers, 'Avatars outside the crop must never appear in the exported GIF').toBeLessThan(.001);
   }
-  const actualGrid = sampleGrid(frames[0].patch!, ...dimensions);
+  for (let i = 0; i < gif.frameCount; i++) {
+    expect(Buffer.from(gif.frames[i + gif.frameCount].rgba).equals(Buffer.from(gif.frames[i].rgba)), `Crop pixels must match on loop 2 frame ${i}`).toBe(true);
+  }
+  const actualGrid = sampleGrid(gif.frames[0].rgba, ...dimensions);
   const difference = actualGrid.reduce((sum, value, i) => sum + Math.abs(value - expectedGrid[i]), 0) / actualGrid.length;
   expect(difference, 'The exported crop must match the independent high-resolution editing preview').toBeLessThan(12);
 }
@@ -91,7 +95,7 @@ for (const decoder of ['native', 'VideoFrame source rectangle ignored', 'compati
         Object.assign(window, { videoFrameCropFault: state });
         const patch = (prototype: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D) => {
           const drawImage = prototype.drawImage;
-          prototype.drawImage = function (source: CanvasImageSource, ...coordinates: number[]) {
+          prototype.drawImage = function (this: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, source: CanvasImageSource, ...coordinates: number[]) {
             if (typeof VideoFrame !== 'undefined' && source instanceof VideoFrame) {
               state.videoFrameDraws++;
               if (coordinates.length === 8) {
