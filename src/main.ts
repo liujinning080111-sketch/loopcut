@@ -61,6 +61,10 @@ let lastPreviewTime = -1;
 let lastAnimation = 0;
 let shareBusy = false;
 const fmt = (n: number) => n.toFixed(2);
+// In-app WebViews (WeChat, Douyin, QQ, Weibo…) lack file sharing, and their
+// long-press "save image" stores a still snapshot rather than the GIF bytes.
+const inAppBrowser = /MicroMessenger|aweme|BytedanceWebview|NewsArticle|\bQQ\/|Weibo|DingTalk|Lark|Feishu|xhsdiscover|FBAN|FBAV|Instagram/i.test(navigator.userAgent);
+const IN_APP_MESSAGE = '当前在 App 内置浏览器中，无法把动图存进相册。请点右上角 ··· 选择「在浏览器打开」，用 Safari 打开本页后再保存。';
 const clamp = (v:number,lo:number,hi:number) => Math.max(lo,Math.min(hi,v));
 const number = (id:string) => Number(input(id).value);
 const transparent = () => mode === 'transparent' || (mode === 'auto' && background.recommendation === 'transparent');
@@ -74,8 +78,8 @@ function setText(id:string,value:string) {if($(id).textContent!==value)$(id).tex
 function updateExportInfo() {
   const kind = input('format').value === 'apng' ? 'APNG' : 'GIF';
   setText('export',`生成 ${kind}`);
-  setText('share',`分享 ${kind}`);
-  setText('open-gif',`打开 ${kind}`);
+  setText('share',kind==='GIF'?'保存到相册':`分享 ${kind}`);
+  $('save-guide').hidden=kind!=='GIF';
   const geometry=number('size')===0?'保留原尺寸':`按所选 ${number('size')} px 长边缩小，不放大小图`;
   const cadence=number('fps')===0?'按原时间轴逐帧读取':`按所选 ${number('fps')} fps 采样`;
   let note = `${geometry}，${cadence}。`+(kind === 'GIF' ? 'GIF 仍会限制颜色，帧时间按 0.01 秒取整。' : 'APNG 无损保存解码后的画面，但不保证能作为微信表情。');
@@ -103,7 +107,7 @@ function invalidate() {
   resultUrl = ''; outputFile = undefined;
   $('result').hidden = true; $('gif-preview').hidden = true;
   $<HTMLImageElement>('gif-preview').removeAttribute('src');
-  ['download','open-gif'].forEach(id => $(id).removeAttribute('href'));
+  $('download').removeAttribute('href');
   previewCanvas.hidden = false;refreshPreview();$('preview-label').textContent = '高清编辑预览 · 约 8 fps';
   if(frames.length) document.querySelectorAll('.steps li').forEach((el,i)=>el.classList.toggle('active',i===1));
 }
@@ -388,25 +392,31 @@ $('export').addEventListener('click',()=>void task(async signal=>{
   signal.throwIfAborted();outputFile=new File([blob],`loopcut-${new Date().toISOString().slice(0,10)}.${kind==='APNG'?'png':'gif'}`,{type:blob.type});resultUrl=URL.createObjectURL(outputFile);
   const img=$<HTMLImageElement>('gif-preview');img.src=resultUrl;img.alt=`已生成的 ${kind} 预览`;img.hidden=false;previewCanvas.hidden=true;
   $('preview-label').textContent=`实际 ${kind} 预览`;playing=true;$('play-toggle').textContent='Ⅱ';$('play-toggle').setAttribute('aria-label','暂停预览');
-  for(const id of ['download','open-gif'])$<HTMLAnchorElement>(id).href=resultUrl;
+  $<HTMLAnchorElement>('download').href=resultUrl;
   $<HTMLAnchorElement>('download').download=outputFile.name;
   $('result-title').textContent=`${kind} 已准备好`;
   const outputSeconds=gifTiming?gifTiming.outputDurationMs/1000:end-start;
   $('result-meta').textContent=`${outputWidth} × ${outputHeight} px · ${count} 帧 · ${(blob.size/1024).toFixed(0)} KB · ${fmt(outputSeconds)} s · ${isTransparent?'透明':'矩形'}`;
   $('result').hidden=false;
   let canShare=false;try{canShare=!!navigator.canShare?.({files:[outputFile]});}catch{/* downloads remain available */}
-  $('share-note').textContent=canShare?'点击分享后，由系统面板选择保存或接收应用。完成分享不代表已保存到照片。':'此环境不能分享动画文件。请下载文件或打开动画，使用浏览器提供的保存方式。';
+  $('share-note').textContent=inAppBrowser?'当前 App 内置浏览器存不了会动的 GIF，请用右上角菜单「在浏览器打开」。':canShare?'请勿长按预览图保存，那样只能存下静止的一帧。':'此浏览器不能直接存到相册，将以文件下载。请勿长按预览图保存。';
+  requestAnimationFrame(()=>$('result').scrollIntoView({behavior:'smooth',block:'nearest'}));
   document.querySelectorAll('.steps li').forEach((el,i)=>el.classList.toggle('active',i===2));
   const timingNotice=gifTiming?.requiresSlowdown?`保留全部画面，文件时长已由 ${fmt(end-start)} 秒延长为 ${fmt(outputSeconds)} 秒。`:gifTiming?.retimed?'短帧时间已自动协调，没有丢帧。':'';
-  notify(`${kind} 已生成，${native?'按原时间轴生成':'按所选帧率采样'} ${count} 帧。${timingNotice}${kind==='GIF'&&plan.some(step=>step.delayMs<20)?'GIF 的高帧率播放可能变慢，详见格式说明。':'检查预览后，点击分享或下载。'}`);
+  notify(`${kind} 已生成，${native?'按原时间轴生成':'按所选帧率采样'} ${count} 帧。${timingNotice}${kind==='GIF'&&plan.some(step=>step.delayMs<20)?'GIF 的高帧率播放可能变慢，详见格式说明。':(kind==='GIF'?'检查预览后，点「保存到相册」。':'检查预览后，点击分享或下载。')}`);
 }));
 $('share').addEventListener('click',()=>{
   if(busy||!outputFile||shareBusy)return;
   let canShare=false;try{canShare=!!navigator.share&&!!navigator.canShare?.({files:[outputFile]});}catch{/* Fall back to download when capability probing throws. */}
-  if(!canShare){notify('当前浏览器无法分享这个动画文件，请使用下载文件或打开动画。');return;}
+  if(!canShare){
+    if(inAppBrowser){notify(IN_APP_MESSAGE,true);$('inapp-banner').scrollIntoView({behavior:'smooth',block:'center'});return;}
+    $<HTMLAnchorElement>('download').click();
+    notify('此浏览器不能直接存到相册，已改为下载文件。在 iPhone 上请用 Safari 打开本页再保存。');return;
+  }
   // Call directly within the user gesture; never await encoding before sharing.
   shareBusy=true;updateAvailability();
-  navigator.share({files:[outputFile]}).then(()=>notify('系统分享操作已完成。请在所选位置确认文件；网页无法确认照片保存结果。')).catch((error:Error)=>notify(error.name==='AbortError'?'已取消分享，动画仍保留，可再次分享或下载。':'系统未能分享这个文件，请改用下载文件或打开动画。',error.name!=='AbortError')).finally(()=>{shareBusy=false;updateAvailability();});
+  // Share only the file: adding text/url makes iOS drop "Save Image" or share a link instead.
+  navigator.share({files:[outputFile]}).then(()=>notify(outputFile?.type==='image/gif'?'已交给系统。若选择了「存储图像」，可在「照片 → 媒体类型 → 动图」中找到这张会动的 GIF。':'系统分享操作已完成，请在所选位置确认文件。')).catch((error:Error)=>notify(error.name==='AbortError'?'已取消分享，动画仍保留，可再次分享或下载。':'系统未能分享这个文件，请改用下载文件或打开动画。',error.name!=='AbortError')).finally(()=>{shareBusy=false;updateAvailability();});
 });
 document.addEventListener('visibilitychange',()=>{if(document.hidden){finishCropDrag(false);stopPreviewRequest();if(busy){controller?.abort();notify('页面进入后台，已停止处理。回到页面后可重新分析或生成 GIF。');}}else{previewDirty=true;}startedAt=performance.now();});
 window.addEventListener('pagehide',()=>{finishCropDrag(false);controller?.abort();stopPreviewRequest();});
@@ -414,5 +424,14 @@ if('serviceWorker' in navigator && import.meta.env.PROD){
   navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`,{scope:import.meta.env.BASE_URL}).then(()=>navigator.serviceWorker.ready).then(()=>{$('offline-status').textContent='应用已缓存 · 可离线打开';}).catch(()=>{$('offline-status').textContent='离线缓存不可用 · 需联网打开';});
 }
 if(!window.isSecureContext)$('offline-status').textContent='当前非 HTTPS · 分享与离线可能不可用';
+$('inapp-banner').hidden=!inAppBrowser;
+// Long-press saving from <img> stores only a still frame on iOS; point users to the save button instead.
+{
+  const gifPreview=$<HTMLImageElement>('gif-preview');let pressTimer=0;
+  const warn=()=>notify(input('format').value==='apng'?'长按保存可能丢失动画，请使用下方的分享或下载按钮。':'长按保存只会存下静止的一帧。请点下方「保存到相册」，再选择「存储图像」。',true);
+  gifPreview.addEventListener('contextmenu',e=>{e.preventDefault();warn();});
+  gifPreview.addEventListener('touchstart',()=>{clearTimeout(pressTimer);pressTimer=window.setTimeout(warn,500);},{passive:true});
+  for(const type of ['touchend','touchmove','touchcancel'])gifPreview.addEventListener(type,()=>clearTimeout(pressTimer),{passive:true});
+}
 updateAvailability();
 updateExportInfo();
